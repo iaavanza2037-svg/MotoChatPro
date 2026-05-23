@@ -36,22 +36,63 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   const isDriver = currentUserProfile.role === 'moto';
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const prevMessagesLengthRef = useRef(messages.length);
+  const lastMessageIdRef = useRef<string | null>(null);
   
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [selectedStar, setSelectedStar] = useState(0);
   const [hoveredStar, setHoveredStar] = useState(0);
   const [isRatingSubmitting, setIsRatingSubmitting] = useState(false);
 
-  // Auto scroll to bottom when messages list updates
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  // Check if scroll position is within 150px of the bottom margin
+  const isNearBottom = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return true;
+    const threshold = 150;
+    const difference = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return difference <= threshold;
+  };
 
-  // Reset rating states when active Chat Session changes to prevent carrying over stars
+  // Smart conditional scroll-to-bottom on messages change
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const lastMsg = messages[messages.length - 1];
+    const lastMsgId = lastMsg?.id || null;
+
+    const messagesCountChanged = messages.length > prevMessagesLengthRef.current;
+    const lastIdChanged = lastMsgId !== null && lastMsgId !== lastMessageIdRef.current;
+    const isNewMessage = messagesCountChanged || lastIdChanged;
+
+    if (isNewMessage) {
+      const isMe = lastMsg?.senderId === currentUserProfile.uid;
+      const userIsNearBottom = isNearBottom();
+
+      // Scroll smoothly only if the current user sent the message, or they are already viewing the bottom
+      if (isMe || userIsNearBottom || prevMessagesLengthRef.current === 0) {
+        chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+
+    // Keep state values in refs
+    prevMessagesLengthRef.current = messages.length;
+    lastMessageIdRef.current = lastMsgId;
+  }, [messages, currentUserProfile.uid]);
+
+  // Reset rating states and jump to bottom immediately when active Chat Session changes
   useEffect(() => {
     setSelectedStar(0);
     setHoveredStar(0);
     setIsRatingSubmitting(false);
+
+    // Initial load scroll
+    const timer = setTimeout(() => {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'auto' });
+    }, 60);
+
+    return () => clearTimeout(timer);
   }, [activeChat.id]);
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -78,17 +119,26 @@ export default function ChatWindow({
 
   // Quick Buttons arrays
   const clientQuickButtons = [
-    { label: '🛵 ¿Disponible?', text: '¿Está disponible en este momento?' },
-    { label: '💵 ¿Cuánto cuesta?', text: 'Hola, ¿cuánto me cobra por el servicio?' },
+    { label: '🛵 ¿Disponible?', text: '¿Disponible?' },
+    { label: '💵 ¿Cuánto cuesta?', text: '¿Cuánto cuesta?' },
+    { label: '🙋 ¿Podría venir?', text: '¿Podría venir a traerme, por favor?' },
+    { label: '📍 Estoy en...', text: 'Hola, estoy en: ' },
+    { label: '👚 Visto con...', text: 'Tengo camisa o vestido de color ' },
+    { label: '🙏 ¡Muchas gracias!', text: '¡Muchas gracias!' },
+    // Additional quick responses at the end
     { label: '📍 Ya en el punto', text: 'Ya me encuentro en el punto de partida esperándolo.' },
     { label: '❓ ¿Por dónde viene?', text: 'Hola, ¿por dónde viene el viaje?' },
     { label: '⚡ Con prisa', text: 'Por favor, si es posible, agradecería cierta rapidez.' },
-    { label: '🙏 Muchas gracias', text: '¡Muchas gracias por el servicio brindado!' },
     { label: '👍 Recibido', text: 'Excelente, comprendido.' },
   ];
 
   const driverQuickButtons = [
-    { label: '✅ Sí, disponible', text: 'Sí, estoy disponible.' },
+    { label: '✅ Sí, disponible!', text: 'Sí, ¡disponible!' },
+    { label: '💵 Cuesta...', text: 'Cuesta: ' },
+    { label: '🏍️ Sí, voy saliendo', text: 'Sí, voy saliendo' },
+    { label: '👕 ¿Cómo viste?', text: '¿Cómo anda vestido(a)?' },
+    { label: '👍 OK, a la orden', text: 'OK, estoy a la orden.' },
+    // Additional quick responses at the end
     { label: '🛵 Voy en camino', text: 'Entendido, voy en camino a su ubicación.' },
     { label: '📍 Ya llegué', text: 'Ya llegué a la ubicación, estoy esperando en el exterior.' },
     { label: '⏳ Demoro 5 min', text: 'Hola, disculpe, demoro unos 5 minutos en llegar.' },
@@ -218,7 +268,10 @@ export default function ChatWindow({
       </div>
 
       {/* Messages Feed panel */}
-      <div className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6 bg-[#F7F9FB] relative">
+      <div 
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6 bg-[#F7F9FB] relative"
+      >
         {/* Background Watermark/Map */}
         <div 
           className="absolute inset-0 pointer-events-none z-0 opacity-[0.06] bg-center bg-no-repeat"

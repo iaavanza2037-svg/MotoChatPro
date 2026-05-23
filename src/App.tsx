@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
   doc, 
@@ -22,10 +22,60 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { UserProfile, ChatSession, ChatMessage } from './types';
+import { getHaversineDistance, getNearestPresetZone } from './utils/location';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2 } from 'lucide-react';
+
+// Helper to play synthesized alarm sound for 1.5 seconds (Ding-Ding! Ding-Ding!)
+function playLoudAlarmSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const startTime = ctx.currentTime;
+
+    // Plays a clean, high-pitched double-beep (C7 + E7) using pure sine waves
+    const playDoubleBeep = (startOffset: number) => {
+      // First beep: High C7 (2048 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(2048, startTime + startOffset);
+      
+      gain1.gain.setValueAtTime(0.001, startTime + startOffset);
+      gain1.gain.linearRampToValueAtTime(0.8, startTime + startOffset + 0.02);
+      gain1.gain.exponentialRampToValueAtTime(0.001, startTime + startOffset + 0.22);
+      
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(startTime + startOffset);
+      osc1.stop(startTime + startOffset + 0.25);
+
+      // Second beep: Even higher E7 (2560 Hz) for a bright, clean notice
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(2560, startTime + startOffset + 0.15);
+      
+      gain2.gain.setValueAtTime(0.001, startTime + startOffset + 0.15);
+      gain2.gain.linearRampToValueAtTime(0.8, startTime + startOffset + 0.17);
+      gain2.gain.exponentialRampToValueAtTime(0.001, startTime + startOffset + 0.38);
+      
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(startTime + startOffset + 0.15);
+      osc2.stop(startTime + startOffset + 0.4);
+    };
+
+    // Repeat the double-beep pattern 2 times (approx 1.2s - 1.5s total)
+    playDoubleBeep(0.0);
+    playDoubleBeep(0.8);
+  } catch (error) {
+    console.warn("Could not play synthesized alarm:", error);
+  }
+}
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any | null>(null);
@@ -37,6 +87,11 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [authChecking, setAuthChecking] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Sound notification tracking refs
+  const lastSessionMessageTimeRef = useRef<{ [chatId: string]: number }>({});
+  const lastSentByMeTimeRef = useRef<{ [chatId: string]: number }>({});
+  const isFirstLoadRef = useRef<boolean>(true);
 
   // Connection tester
   useEffect(() => {
@@ -88,7 +143,7 @@ export default function App() {
           return;
         }
 
-        // Fallback user profile setup if none exists
+  // Fallback user profile setup if none exists
         const email = currentUser.email || '';
         const fallbackName = email.split('@')[0] || 'Usuario';
         const initialProfile: UserProfile = {
@@ -96,6 +151,7 @@ export default function App() {
           email,
           name: fallbackName,
           role: 'cliente',
+          zone: 'Langue (Centro)',
           isOnline: true,
           lastActive: Date.now()
         };
@@ -162,8 +218,43 @@ export default function App() {
 
     const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
       const list = snapshot.docs.map(d => d.data() as UserProfile);
-      // Filter clientside to only users who checked in with heartbeat within 45 seconds
-      const activePulseList = list.filter(u => Date.now() - u.lastActive < 45000);
+      
+      const normalizeZone = (z?: string) => {
+        if (!z) return 'langue (centro)';
+        return z.trim().toLowerCase();
+      };
+
+      const userZoneNormalized = normalizeZone(userProfile.zone);
+
+      // Filter clientside to only users who checked in with heartbeat within 45 seconds AND match geographic zone OR are nearby with GPS
+      const activePulseList = list.filter(u => {
+        const isPulseActive = Date.now() - u.lastActive < 45000;
+        if (!isPulseActive) return false;
+
+        // Proximity condition (if both users have GPS coordinates)
+        if (
+          userProfile.hasGPS &&
+          u.hasGPS &&
+          userProfile.latitude !== undefined &&
+          userProfile.longitude !== undefined &&
+          u.latitude !== undefined &&
+          u.longitude !== undefined
+        ) {
+          const dist = getHaversineDistance(
+            userProfile.latitude,
+            userProfile.longitude,
+            u.latitude,
+            u.longitude
+          );
+          // Match if they are within 15 km of each other (even if the string zone is different!)
+          return dist <= 15;
+        }
+
+        // Fallback: match by zone string name if either does not have GPS
+        const matchesZone = normalizeZone(u.zone) === userZoneNormalized;
+        return matchesZone;
+      });
+
       setOnlineUsers(activePulseList);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'users');
@@ -172,9 +263,74 @@ export default function App() {
     return () => unsubUsers();
   }, [currentUser, userProfile]);
 
-  // Listen to Chat Sessions according to user role
+  // Automatic Real-Time Location Tracking (GPS Geolocation Watch)
   useEffect(() => {
     if (!currentUser || !userProfile) return;
+
+    if (!("geolocation" in navigator)) {
+      console.warn("Geolocation API is not supported by this browser.");
+      return;
+    }
+
+    const successCallback = async (position: GeolocationPosition) => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+
+      // Only write update if coords changed or hasGPS wasn't set to prevent infinite loop
+      if (
+        !userProfile.hasGPS ||
+        userProfile.latitude !== lat ||
+        userProfile.longitude !== lon
+      ) {
+        try {
+          // Identify nearest community to automatically map text-based zones
+          const nearestZone = getNearestPresetZone(lat, lon);
+          
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          await updateDoc(userDocRef, {
+            latitude: lat,
+            longitude: lon,
+            hasGPS: true,
+            zone: nearestZone,
+            lastActive: Date.now()
+          });
+          console.log(`[GPS] Ubicación actualizada: ${lat}, ${lon} (${nearestZone})`);
+        } catch (err) {
+          console.warn("[GPS] Error actualizando firestore con coordenadas:", err);
+        }
+      }
+    };
+
+    const errorCallback = (error: GeolocationPositionError) => {
+      console.warn("[GPS] Error de geolocalización o permiso denegado:", error.message);
+    };
+
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 30000
+    };
+
+    const watchId = navigator.geolocation.watchPosition(successCallback, errorCallback, options);
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [currentUser, userProfile?.uid]); // Bind to stable uid primitive to avoid infinite updates!
+
+  // Listen to Chat Sessions according to user role
+  useEffect(() => {
+    if (!currentUser || !userProfile) {
+      isFirstLoadRef.current = true;
+      lastSessionMessageTimeRef.current = {};
+      lastSentByMeTimeRef.current = {};
+      return;
+    }
+
+    // Reset tracking for new login session
+    isFirstLoadRef.current = true;
+    lastSessionMessageTimeRef.current = {};
+    lastSentByMeTimeRef.current = {};
 
     const keyField = userProfile.role === 'moto' ? 'driverId' : 'clientId';
     const chatsQuery = query(
@@ -184,6 +340,41 @@ export default function App() {
 
     const unsubChats = onSnapshot(chatsQuery, (snapshot) => {
       const list = snapshot.docs.map(d => d.data() as ChatSession);
+
+      let shouldPlayAlert = false;
+
+      list.forEach(chat => {
+        const previousTime = lastSessionMessageTimeRef.current[chat.id];
+        const isNewMessage = previousTime !== undefined && chat.lastMessageTime > previousTime;
+
+        // Remember the latest timestamp
+        lastSessionMessageTimeRef.current[chat.id] = chat.lastMessageTime;
+
+        // Sound trigger conditions: only for active moto users, after initial load, for newer messages
+        if (isNewMessage && !isFirstLoadRef.current && userProfile.role === 'moto') {
+          // Check if we sent this message in the last 2 seconds (e.g. bypass echo sound or ourselves sending)
+          const sentRecently = lastSentByMeTimeRef.current[chat.id] && (Date.now() - lastSentByMeTimeRef.current[chat.id] < 2000);
+          const isDefaultStart = chat.lastMessage === 'Servicio iniciado. Esperando mensajes...';
+          const isTransfer = chat.lastMessage && chat.lastMessage.startsWith('⚠️');
+
+          if (!sentRecently && !isDefaultStart && !isTransfer) {
+            shouldPlayAlert = true;
+          }
+        } else if (previousTime === undefined) {
+          // First time we see this session in this snapshot run, initialize the tracking timestamp
+          lastSessionMessageTimeRef.current[chat.id] = chat.lastMessageTime;
+        }
+      });
+
+      // Turn off initial load state after first snapshot finishes handling
+      if (isFirstLoadRef.current) {
+        isFirstLoadRef.current = false;
+      }
+
+      if (shouldPlayAlert) {
+        playLoudAlarmSound();
+      }
+
       // Filter out chats that are logically deleted for this user
       const filteredList = list.filter(chat => {
         if (userProfile.role === 'moto') {
@@ -334,6 +525,7 @@ export default function App() {
 
     const chatId = selectedChatId;
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const now = Date.now();
 
     const newMessagePayload: ChatMessage = {
       id: messageId,
@@ -341,9 +533,13 @@ export default function App() {
       text: text.trim(),
       senderId: currentUser.uid,
       senderName: userProfile.name,
-      timestamp: Date.now(),
+      timestamp: now,
       type: 'text'
     };
+
+    // Track that we sent a message to this chat to avoid playing notifications on our echo
+    lastSentByMeTimeRef.current[chatId] = now;
+    lastSessionMessageTimeRef.current[chatId] = now;
 
     try {
       // 1. Write the message Doc first as that's permission safe
@@ -353,7 +549,7 @@ export default function App() {
       const chatDocRef = doc(db, 'chats', chatId);
       await setDoc(chatDocRef, {
         lastMessage: text.trim(),
-        lastMessageTime: Date.now(),
+        lastMessageTime: now,
         clientDeleted: false,
         driverDeleted: false
       }, { merge: true });
@@ -553,6 +749,52 @@ export default function App() {
     }
   };
 
+  // Action: Update user's current geographic zone
+  const handleUpdateZone = async (newZone: string) => {
+    if (!currentUser) return;
+    try {
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userDocRef, {
+        zone: newZone,
+        lastActive: Date.now()
+      });
+      console.log(`User ${currentUser.uid} geographic zone updated to: ${newZone}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+    }
+  };
+
+  // Find the selected chat session details
+  const activeChat = useMemo(() => {
+    if (!userProfile) return undefined;
+    return chats.find(c => c.id === selectedChatId) || (selectedChatId ? {
+      id: selectedChatId,
+      clientId: userProfile.role === 'cliente' ? userProfile.uid : selectedChatId.split('_')[0],
+      clientName: userProfile.role === 'cliente' ? userProfile.name : 'Cliente',
+      clientEmail: userProfile.role === 'cliente' ? userProfile.email : '',
+      driverId: userProfile.role === 'moto' ? userProfile.uid : selectedChatId.split('_')[1],
+      driverName: userProfile.role === 'moto' ? userProfile.name : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.name || 'Mototaxista'),
+      driverEmail: userProfile.role === 'moto' ? userProfile.email : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.email || ''),
+      status: 'open',
+      lastMessage: 'Servicio iniciado. Esperando mensajes...',
+      lastMessageTime: Date.now()
+    } as ChatSession : undefined);
+  }, [chats, selectedChatId, userProfile, onlineUsers]);
+
+  const clearedAt = useMemo(() => {
+    if (activeChat && activeChat.lastMessage && activeChat.lastMessage.startsWith('[clear]:')) {
+      const parts = activeChat.lastMessage.split(':');
+      if (parts.length > 1) {
+        return parseInt(parts[1], 10) || 0;
+      }
+    }
+    return 0;
+  }, [activeChat?.lastMessage]);
+
+  const visibleMessages = useMemo(() => {
+    return messages.filter(m => m.timestamp > clearedAt);
+  }, [messages, clearedAt]);
+
   if (authChecking) {
     return (
       <div className="min-h-screen bg-[#F7F9FB] flex flex-col items-center justify-center p-4">
@@ -573,30 +815,6 @@ export default function App() {
   if (!currentUser || !userProfile) {
     return <Login onAuthSuccess={() => {}} />;
   }
-
-  // Find the selected chat session details
-  const activeChat = chats.find(c => c.id === selectedChatId) || (selectedChatId ? {
-    id: selectedChatId,
-    clientId: userProfile.role === 'cliente' ? userProfile.uid : selectedChatId.split('_')[0],
-    clientName: userProfile.role === 'cliente' ? userProfile.name : 'Cliente',
-    clientEmail: userProfile.role === 'cliente' ? userProfile.email : '',
-    driverId: userProfile.role === 'moto' ? userProfile.uid : selectedChatId.split('_')[1],
-    driverName: userProfile.role === 'moto' ? userProfile.name : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.name || 'Mototaxista'),
-    driverEmail: userProfile.role === 'moto' ? userProfile.email : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.email || ''),
-    status: 'open',
-    lastMessage: 'Servicio iniciado. Esperando mensajes...',
-    lastMessageTime: Date.now()
-  } as ChatSession : undefined);
-
-  let clearedAt = 0;
-  if (activeChat && activeChat.lastMessage && activeChat.lastMessage.startsWith('[clear]:')) {
-    const parts = activeChat.lastMessage.split(':');
-    if (parts.length > 1) {
-      clearedAt = parseInt(parts[1], 10) || 0;
-    }
-  }
-
-  const visibleMessages = messages.filter(m => m.timestamp > clearedAt);
 
   const partnerId = activeChat ? (userProfile.role === 'moto' ? activeChat.clientId : activeChat.driverId) : '';
   const partnerProfile = onlineUsers.find(u => u.uid === partnerId);
@@ -630,6 +848,7 @@ export default function App() {
           onSelectChat={handleSelectChat}
           onTransferChat={handleTransferChat}
           onLogout={handleLogout}
+          onUpdateZone={handleUpdateZone}
         />
       </div>
 
@@ -673,7 +892,7 @@ export default function App() {
               <div className="inline-flex p-4 bg-yellow-405/15 border border-yellow-205 text-yellow-600 rounded-full mb-4 shadow-md shadow-yellow-100">
                 <span className="text-4xl">🛵</span>
               </div>
-              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">Moto Chat - Red de Mototaxis</h2>
+              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">MotoChatPro</h2>
               
               {userProfile?.role === 'cliente' ? (
                 <>

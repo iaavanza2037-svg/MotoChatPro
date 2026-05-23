@@ -3,10 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { UserProfile, ChatSession } from '../types';
 import { LogOut, User, Users, Shield, Compass, ChevronRight, MessageSquare, RefreshCw, Radio } from 'lucide-react';
 import { motion } from 'motion/react';
+import { getHaversineDistance } from '../utils/location';
+
+const ZONAS_PRESETS = [
+  "Langue (Centro)",
+  "Concepción de Langue",
+  "San Isidro",
+  "El Jícaro",
+  "El Carrizal",
+  "Las Mesas",
+  "San Francisco",
+  "Aduana El Amatillo",
+  "Nacaome Centro",
+  "Pespire Centro",
+  "Choluteca Centro",
+];
 
 interface SidebarProps {
   currentUserProfile: UserProfile;
@@ -17,6 +32,7 @@ interface SidebarProps {
   onSelectChat: (chat: ChatSession) => void;
   onTransferChat: (targetDriver: UserProfile) => void;
   onLogout: () => void;
+  onUpdateZone: (newZone: string) => Promise<void>;
 }
 
 export default function Sidebar({
@@ -27,9 +43,33 @@ export default function Sidebar({
   onSelectUser,
   onSelectChat,
   onTransferChat,
-  onLogout
+  onLogout,
+  onUpdateZone
 }: SidebarProps) {
   const isDriver = currentUserProfile.role === 'moto';
+  const [isEditingZone, setIsEditingZone] = useState(false);
+  const [selectedZone, setSelectedZone] = useState(currentUserProfile.zone || 'Langue (Centro)');
+  const [customZone, setCustomZone] = useState('');
+
+  const getDistanceDisplay = (otherUser: UserProfile) => {
+    if (
+      currentUserProfile.hasGPS &&
+      otherUser.hasGPS &&
+      currentUserProfile.latitude !== undefined &&
+      currentUserProfile.longitude !== undefined &&
+      otherUser.latitude !== undefined &&
+      otherUser.longitude !== undefined
+    ) {
+      const distance = getHaversineDistance(
+        currentUserProfile.latitude,
+        currentUserProfile.longitude,
+        otherUser.latitude,
+        otherUser.longitude
+      );
+      return `${distance.toFixed(1)} km`;
+    }
+    return null;
+  };
 
   const renderStars = (averageRating?: number, ratingCount?: number, darkTheme: boolean = false) => {
     const rating = averageRating || 0;
@@ -97,6 +137,89 @@ export default function Sidebar({
         >
           <LogOut className="w-4 h-4" />
         </button>
+      </div>
+
+      {/* Location / Geographic Zone Selector Sub-Header */}
+      <div className="px-5 py-3.5 bg-slate-800 text-white border-t border-slate-700 flex flex-col justify-start gap-1">
+        <div className="flex items-center justify-between w-full">
+          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+            <span>📍</span> Ubicación Actual
+          </span>
+          <button 
+            type="button"
+            onClick={() => setIsEditingZone(!isEditingZone)}
+            className="text-[10px] text-yellow-405 hover:text-yellow-300 font-bold bg-transparent border-none cursor-pointer p-0 select-none outline-none"
+          >
+            {isEditingZone ? 'Cancelar' : 'Cambiar Ubicación'}
+          </button>
+        </div>
+        
+        {isEditingZone ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <select
+              value={selectedZone}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedZone(val);
+                if (val !== 'Otro') {
+                  onUpdateZone(val);
+                  setIsEditingZone(false);
+                }
+              }}
+              className="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-yellow-400 font-medium"
+            >
+              {ZONAS_PRESETS.map(z => (
+                <option key={z} className="bg-slate-900" value={z}>{z}</option>
+              ))}
+              <option className="bg-slate-900" value="Otro">Otro (Escribir...)</option>
+            </select>
+            
+            {selectedZone === 'Otro' && (
+              <motion.div 
+                initial={{ opacity: 0, y: -5 }} 
+                animate={{ opacity: 1, y: 0 }} 
+                className="flex gap-1.5"
+              >
+                <input
+                  type="text"
+                  placeholder="Escribe municipio o aldea"
+                  value={customZone}
+                  onChange={(e) => setCustomZone(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-700 text-white text-xs rounded px-2.5 py-1.5 placeholder-slate-500 font-semibold focus:outline-none focus:border-yellow-450"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const finalZ = customZone.trim();
+                    if (finalZ) {
+                      onUpdateZone(finalZ);
+                      setIsEditingZone(false);
+                    }
+                  }}
+                  className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold text-xs rounded px-3 py-1.5 transition-colors cursor-pointer"
+                >
+                  Ok
+                </button>
+              </motion.div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-0.5 mt-0.5">
+            <span className="text-xs font-bold text-yellow-400 tracking-wide truncate flex items-center gap-1">
+              {currentUserProfile.zone || 'Langue (Centro)'}
+            </span>
+            {currentUserProfile.hasGPS ? (
+              <span className="text-[9px] text-emerald-400 font-medium flex items-center gap-1 font-mono">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                CONEXIÓN GPS ACTIVA (Filtro auto a 15km)
+              </span>
+            ) : (
+              <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 font-mono">
+                ⚠️ GPS INACTIVO (Modo manual activo)
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Online Status Header banner */}
@@ -193,12 +316,19 @@ export default function Sidebar({
                       }`}
                     >
                       <div className="min-w-0 pr-2">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                           <p className="font-bold text-xs truncate">{driver.name}</p>
                           {renderStars(driver.averageRating, driver.ratingCount, false)}
+                          {getDistanceDisplay(driver) && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                              isSelected ? 'bg-slate-900/20 text-slate-950 font-bold' : 'bg-sky-50 text-sky-700 border border-sky-100 font-bold'
+                            }`} title="Distancia calculada por GPS">
+                              📍 a {getDistanceDisplay(driver)}
+                            </span>
+                          )}
                         </div>
-                        <p className={`text-[10px] truncate mt-0.5 ${isSelected ? 'text-blue-100' : 'text-slate-500 font-mono'}`}>
+                        <p className={`text-[10px] truncate mt-0.5 ${isSelected ? 'text-slate-900/60' : 'text-slate-500 font-mono'}`}>
                           {driver.email}
                         </p>
                       </div>
@@ -243,6 +373,11 @@ export default function Sidebar({
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                         <p className="font-bold text-xs truncate text-slate-800">{driver.name}</p>
                         {renderStars(driver.averageRating, driver.ratingCount, false)}
+                        {getDistanceDisplay(driver) && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-100 shrink-0" title="Distancia calculada por GPS">
+                            📍 a {getDistanceDisplay(driver)}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[9px] text-slate-500 truncate mt-0.5 font-mono">{driver.email}</p>
                     </div>

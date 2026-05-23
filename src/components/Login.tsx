@@ -4,11 +4,25 @@
  */
 
 import React, { useState } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signInAnonymously } from 'firebase/auth';
 import { setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { User, LogIn, Mail, Lock, Shield, UserCheck, AlertCircle, Sparkles } from 'lucide-react';
+
+const ZONAS_PRESETS = [
+  "Langue (Centro)",
+  "Concepción de Langue",
+  "San Isidro",
+  "El Jícaro",
+  "El Carrizal",
+  "Las Mesas",
+  "San Francisco",
+  "Aduana El Amatillo",
+  "Nacaome Centro",
+  "Pespire Centro",
+  "Choluteca Centro",
+];
 
 interface LoginProps {
   onAuthSuccess: () => void;
@@ -23,13 +37,21 @@ export default function Login({ onAuthSuccess }: LoginProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [selectedZone, setSelectedZone] = useState('Langue (Centro)');
+  const [customZone, setCustomZone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [authTab, setAuthTab] = useState<'invite' | 'google' | 'email'>('invite');
 
   // Sync role to localStorage so App.tsx is immediately in line
   const handleSetRole = (newRole: 'cliente' | 'moto') => {
     setRole(newRole);
     localStorage.setItem('moto_chat_pending_registration', newRole);
+    if (newRole === 'moto') {
+      setAuthTab('google');
+    } else {
+      setAuthTab('invite');
+    }
   };
 
   const handleAnonymousSignIn = async () => {
@@ -44,6 +66,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
       const userDocSnap = await getDoc(userDocRef);
       
       const customName = name.trim() || (role === 'cliente' ? `Pasajero_${Math.floor(1000 + Math.random() * 9000)}` : `Mototaxista_${Math.floor(1000 + Math.random() * 9000)}`);
+      const finalZone = selectedZone === 'Otro' ? (customZone.trim() || 'Langue (Centro)') : selectedZone;
       
       if (!userDocSnap.exists()) {
         await setDoc(userDocRef, {
@@ -51,6 +74,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           email: `guest_${user.uid.substring(0, 8)}@motochat.com`,
           name: customName,
           role: role,
+          zone: finalZone,
           isOnline: true,
           lastActive: Date.now()
         });
@@ -58,6 +82,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
         await setDoc(userDocRef, {
           role: role,
           name: name.trim() || userDocSnap.data()?.name || customName,
+          zone: finalZone,
           isOnline: true,
           lastActive: Date.now()
         }, { merge: true });
@@ -98,6 +123,8 @@ export default function Login({ onAuthSuccess }: LoginProps) {
     }
 
     try {
+      const finalZone = selectedZone === 'Otro' ? (customZone.trim() || 'Langue (Centro)') : selectedZone;
+
       if (isSignUp) {
         localStorage.setItem('moto_chat_pending_registration', role);
         // Create user
@@ -110,6 +137,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           email: email.trim(),
           name: displayName,
           role: role,
+          zone: finalZone,
           isOnline: true,
           lastActive: Date.now()
         });
@@ -120,6 +148,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
         const userDocRef = doc(db, 'users', credential.user.uid);
         const updateData: any = {
           role: role,
+          zone: finalZone,
           isOnline: true,
           lastActive: Date.now()
         };
@@ -167,12 +196,14 @@ export default function Login({ onAuthSuccess }: LoginProps) {
       const userDocSnap = await getDoc(userDocRef);
       
       const displayName = name.trim() || userDocSnap.data()?.name || user.displayName || user.email?.split('@')[0] || 'Usuario';
+      const finalZone = selectedZone === 'Otro' ? (customZone.trim() || 'Langue (Centro)') : selectedZone;
       
       await setDoc(userDocRef, {
         uid: user.uid,
         email: user.email || userDocSnap.data()?.email || '',
         name: displayName,
         role: role,
+        zone: finalZone,
         isOnline: true,
         lastActive: Date.now()
       }, { merge: true });
@@ -184,7 +215,7 @@ export default function Login({ onAuthSuccess }: LoginProps) {
       console.error(err);
       let localizedMsg = 'Ocurrió un error con el inicio de sesión de Google.';
       if (err.code === 'auth/popup-blocked') {
-        localizedMsg = 'El navegador bloqueó la ventana emergente de Google. Por favor, permite ventanas emergentes para Moto Chat.';
+        localizedMsg = 'El navegador bloqueó la ventana emergente de Google. Por favor, permite ventanas emergentes para MotoChatPro.';
       } else if (err.code === 'auth/popup-closed-by-user') {
         localizedMsg = 'La ventana de inicio de sesión de Google fue cerrada antes de completarse.';
       } else if (err.code === 'auth/operation-not-allowed') {
@@ -225,9 +256,9 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           <div className="inline-flex p-4 bg-yellow-400 text-slate-900 rounded-full mb-3 shadow-md shadow-yellow-250">
             <span className="text-3xl font-bold">🛵</span>
           </div>
-          <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">Moto Chat</h1>
+          <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">MotoChatPro</h1>
           <p className="text-slate-550 mt-2 text-sm leading-relaxed">
-            Tu servicio de mototaxis rápido, directo y en tiempo real
+            Tu servicio de motos, mototaxis y taxis rápido, directo y en tiempo real
           </p>
         </div>
 
@@ -362,8 +393,8 @@ export default function Login({ onAuthSuccess }: LoginProps) {
               }`}
             >
               <UserCheck className="w-6 h-6 shrink-0" />
-              <div className="text-center">
-                <p className="text-xs font-black uppercase tracking-wider">Cliente/Pasajero</p>
+              <div className="text-center font-bold">
+                <p className="text-xs font-black uppercase tracking-wider">Cliente</p>
                 <p className="text-[10px] text-slate-500 mt-0.5 font-normal">Quiero pedir viajes</p>
               </div>
             </button>
@@ -404,49 +435,132 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           </p>
         </div>
 
+        {/* STEP 1.7: Zona / Comunidad (Required) */}
+        <div className="mb-6 bg-slate-50 border border-slate-200 p-3.5 rounded-2xl">
+          <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider text-center flex items-center justify-center gap-1.5">
+            <span className="text-yellow-500 text-sm">📍</span>
+            Tu Ubicación / Municipio / Aldea
+          </label>
+          
+          <select
+            value={selectedZone}
+            onChange={(e) => setSelectedZone(e.target.value)}
+            className="w-full text-center bg-white border border-slate-200 rounded-xl py-2 px-3 text-slate-800 text-xs focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold mb-2"
+          >
+            {ZONAS_PRESETS.map(z => (
+              <option key={z} value={z}>{z}</option>
+            ))}
+            <option value="Otro">Otro (Escribir personalizado...)</option>
+          </select>
+
+          {selectedZone === 'Otro' && (
+            <motion.input
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              type="text"
+              placeholder="Escribe tu Barrio, Aldea o Municipio"
+              value={customZone}
+              onChange={(e) => setCustomZone(e.target.value)}
+              className="w-full text-center bg-white border border-slate-200 rounded-xl py-2 px-3 text-slate-800 text-xs placeholder-slate-400 focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
+            />
+          )}
+          <p className="text-center text-[9px] text-slate-400 mt-1.5 leading-tight">
+            💡 Verás únicamente a los usuarios de tu ubicación seleccionada para evitar confusión entre zonas distantes.
+          </p>
+        </div>
+
         {/* STEP 2: Main connect Actions */}
         <div className="mb-6 space-y-3">
-          <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
-            Paso 2: Conéctate al instante
-          </label>
+          {role === 'moto' ? (
+            <>
+              <motion.div
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-yellow-400/10 border border-yellow-350 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 shadow-sm text-center"
+              >
+                <p className="font-bold text-yellow-800 flex items-center justify-center gap-1.5 text-xs">
+                  <span>⚠️</span> Registro Obligatorio para mototaxistas
+                </p>
+              </motion.div>
 
-          {/* Highly Reliable Google Login Button */}
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={loading}
-            className={`w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
-              loading ? 'scale-95' : 'active:scale-95'
-            }`}
-          >
-            {loading ? (
-              <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#EA4335"
-                  d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.48 14.98 1 12 1 7.35 1 3.37 3.68 1.41 7.59l3.8 2.94C6.15 7.15 8.86 5.04 12 5.04z"
-                />
-                <path
-                  fill="#4285F4"
-                  d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.46c-.28 1.48-1.11 2.73-2.35 3.57l3.72 2.87c2.18-2.01 3.66-4.97 3.66-8.54z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.21 10.53c-.24-.72-.38-1.49-.38-2.28s.14-1.56.38-2.28L1.41 3.59C.51 5.39 0 7.39 0 9.5s.51 4.11 1.41 5.91l3.8-2.88z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 18.96c-3.14 0-5.85-2.11-6.79-5.49l-3.8 2.88c1.96 3.91 5.94 6.59 10.59 6.59 2.98 0 5.66-1 7.55-2.71l-3.72-2.87c-1.03.68-2.35 1.1-4.03 1.1z"
-                />
-              </svg>
-            )}
-            <span>Conectar con Google</span>
-          </button>
-          
-          <p className="text-center text-[11px] text-slate-400 mt-2.5 font-medium leading-relaxed">
-            🚀 ¡Listo al instante! Elige tu perfil arriba y haz clic para entrar sin perder tiempo.
-          </p>
+              <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
+                Paso 2: Conéctate con Google
+              </label>
+
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className={`w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                  loading ? 'scale-95' : 'active:scale-95'
+                }`}
+              >
+                {loading ? (
+                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.48 14.98 1 12 1 7.35 1 3.37 3.68 1.41 7.59l3.8 2.94C6.15 7.15 8.86 5.04 12 5.04z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.46c-.28 1.48-1.11 2.73-2.35 3.57l3.72 2.87c2.18-2.01 3.66-4.97 3.66-8.54z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.21 10.53c-.24-.72-.38-1.49-.38-2.28s.14-1.56.38-2.28L1.41 3.59C.51 5.39 0 7.39 0 9.5s.51 4.11 1.41 5.91l3.8-2.88z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 18.96c-3.14 0-5.85-2.11-6.79-5.49l-3.8 2.88c1.96 3.91 5.94 6.59 10.59 6.59 2.98 0 5.66-1 7.55-2.71l-3.72-2.87c-1.03.68-2.35 1.1-4.03 1.1z"
+                    />
+                  </svg>
+                )}
+                <span>Conectar con Google</span>
+              </button>
+
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[10.5px] text-slate-550 leading-relaxed text-center">
+                🛡️ <em>Requiere una cuenta de Google para garantizar la confianza en el servicio.</em>
+              </div>
+            </>
+          ) : (
+            <>
+              <motion.div
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-emerald-500/10 border border-emerald-200 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 text-center"
+              >
+                <p className="font-medium text-emerald-800 font-bold">
+                  🎉 El servicio para <strong>Clientes</strong> es 100% gratuito y libre de cargos.
+                </p>
+              </motion.div>
+
+              <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
+                Paso 2: Conéctate al Instante
+              </label>
+
+              <button
+                type="button"
+                onClick={handleAnonymousSignIn}
+                disabled={loading}
+                className={`w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                  loading ? 'scale-95' : 'active:scale-95'
+                }`}
+              >
+                {loading ? (
+                  <span className="inline-block w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Sparkles className="w-5 h-5 text-slate-900" />
+                )}
+                <span>Entrar como Cliente</span>
+              </button>
+
+              <p className="text-center text-[11px] text-slate-550 mt-1 leading-relaxed px-1">
+                ⚡ <strong>100% Libre y Compatible:</strong> Olvídate de registros pesados o contraseñas. Únete de inmediato de forma rápida y sin complicaciones.
+              </p>
+            </>
+          )}
         </div>
 
       </motion.div>

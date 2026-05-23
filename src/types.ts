@@ -13,6 +13,10 @@ export interface UserProfile {
   ratingCount?: number;
   ratingSum?: number;
   averageRating?: number;
+  zone?: string;
+  latitude?: number;
+  longitude?: number;
+  hasGPS?: boolean;
 }
 
 export interface ChatSession {

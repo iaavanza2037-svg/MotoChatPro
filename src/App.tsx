@@ -137,26 +137,25 @@ export default function App() {
           const userProfileRef = doc(db, 'users', user.uid);
           const userDocSnap = await getDoc(userProfileRef);
           
-          if (!userDocSnap.exists()) {
-            const savedRole = localStorage.getItem('moto_chat_pending_registration') || 'cliente';
-            const savedName = localStorage.getItem('moto_chat_saved_name') || '';
-            const savedZone = localStorage.getItem('moto_chat_saved_zone') || 'Langue (Centro)';
-            const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
+          const savedRole = localStorage.getItem('moto_chat_pending_registration');
+          const savedName = localStorage.getItem('moto_chat_saved_name') || '';
+          const savedZone = localStorage.getItem('moto_chat_saved_zone');
+          const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
 
-            const displayName = savedName.trim() || user.displayName || user.email?.split('@')[0] || 'Usuario';
-            const finalZone = savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone;
+          const displayName = savedName.trim() || userDocSnap.data()?.name || user.displayName || user.email?.split('@')[0] || 'Usuario';
+          const finalZone = savedZone ? (savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone) : (userDocSnap.data()?.zone || 'Langue (Centro)');
+          const finalRole = (savedRole === 'moto' || savedRole === 'cliente') ? savedRole : (userDocSnap.data()?.role || 'cliente');
 
-            await setDoc(userProfileRef, {
-              uid: user.uid,
-              email: user.email || '',
-              name: displayName,
-              role: savedRole,
-              zone: finalZone,
-              isOnline: true,
-              lastActive: Date.now()
-            }, { merge: true });
-            console.log("Perfil del usuario guardado correctamente.");
-          }
+          await setDoc(userProfileRef, {
+            uid: user.uid,
+            email: user.email || userDocSnap.data()?.email || '',
+            name: displayName,
+            role: finalRole,
+            zone: finalZone,
+            isOnline: true,
+            lastActive: Date.now()
+          }, { merge: true });
+          console.log("Perfil del usuario guardado/actualizado correctamente.");
           
           // Limpiar datos temporales de registro
           localStorage.removeItem('moto_chat_pending_registration');
@@ -177,39 +176,31 @@ export default function App() {
             const userProfileRef = doc(db, 'users', user.uid);
             const userDocSnap = await getDoc(userProfileRef);
             
-            if (!userDocSnap.exists()) {
-              const savedRole = localStorage.getItem('moto_chat_pending_registration') || 'cliente';
-              const savedName = localStorage.getItem('moto_chat_saved_name') || '';
-              const savedZone = localStorage.getItem('moto_chat_saved_zone') || 'Langue (Centro)';
-              const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
+            const savedRole = localStorage.getItem('moto_chat_pending_registration');
+            const savedName = localStorage.getItem('moto_chat_saved_name') || '';
+            const savedZone = localStorage.getItem('moto_chat_saved_zone');
+            const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
 
-              const displayName = savedName.trim() || user.displayName || user.email?.split('@')[0] || 'Usuario';
-              const finalZone = savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone;
+            const displayName = savedName.trim() || userDocSnap.data()?.name || user.displayName || user.email?.split('@')[0] || 'Usuario';
+            const finalZone = savedZone ? (savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone) : (userDocSnap.data()?.zone || 'Langue (Centro)');
+            const finalRole = (savedRole === 'moto' || savedRole === 'cliente') ? savedRole : (userDocSnap.data()?.role || 'cliente');
 
-              await setDoc(userProfileRef, {
-                uid: user.uid,
-                email: user.email || '',
-                name: displayName,
-                role: savedRole,
-                zone: finalZone,
-                isOnline: true,
-                lastActive: Date.now()
-              }, { merge: true });
-              console.log("Perfil de respaldo creado con éxito después del error.");
-              
-              localStorage.removeItem('moto_chat_pending_registration');
-              localStorage.removeItem('moto_chat_saved_name');
-              localStorage.removeItem('moto_chat_saved_zone');
-              localStorage.removeItem('moto_chat_saved_custom_zone');
-              localStorage.removeItem('moto_chat_redirect_active');
-            } else {
-              // Si el perfil ya existe en Firestore, limpia los metadatos temporales de registro
-              localStorage.removeItem('moto_chat_pending_registration');
-              localStorage.removeItem('moto_chat_saved_name');
-              localStorage.removeItem('moto_chat_saved_zone');
-              localStorage.removeItem('moto_chat_saved_custom_zone');
-              localStorage.removeItem('moto_chat_redirect_active');
-            }
+            await setDoc(userProfileRef, {
+              uid: user.uid,
+              email: user.email || userDocSnap.data()?.email || '',
+              name: displayName,
+              role: finalRole,
+              zone: finalZone,
+              isOnline: true,
+              lastActive: Date.now()
+            }, { merge: true });
+            console.log("Perfil de respaldo creado/actualizado con éxito después del error.");
+            
+            localStorage.removeItem('moto_chat_pending_registration');
+            localStorage.removeItem('moto_chat_saved_name');
+            localStorage.removeItem('moto_chat_saved_zone');
+            localStorage.removeItem('moto_chat_saved_custom_zone');
+            localStorage.removeItem('moto_chat_redirect_active');
           } catch (innerErr) {
             console.error("Error al crear perfil de respaldo:", innerErr);
           }

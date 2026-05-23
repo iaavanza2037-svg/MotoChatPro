@@ -547,92 +547,272 @@ export default function Login({ onAuthSuccess }: LoginProps) {
         <div className="mb-6 space-y-3">
           {role === 'moto' ? (
             <>
-              <motion.div
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-yellow-400/10 border border-yellow-350 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 shadow-sm text-center"
-              >
-                <p className="font-bold text-yellow-800 flex items-center justify-center gap-1.5 text-xs">
-                  <span>⚠️</span> Registro Obligatorio para mototaxistas
-                </p>
-              </motion.div>
+              {showClassicAuth ? (
+                /* EMAIL PASSWORD BACK-UP INTERFACE FOR MOTOTAXISTAS */
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div className="bg-yellow-400/10 border border-yellow-350 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 shadow-sm text-center">
+                    <p className="font-bold text-yellow-800 flex items-center justify-center gap-1.5 text-xs">
+                      <span>🚲</span> Registro/Acceso con Correo para Mototaxistas
+                    </p>
+                  </div>
 
-              <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
-                Paso 2: Conéctate con Google
-              </label>
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-bold mb-1 uppercase tracking-wider">
+                      Correo Electrónico
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="ejemplo@correo.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3.5 text-slate-800 text-xs focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
+                    />
+                  </div>
 
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                disabled={loading}
-                className={`w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
-                  loading ? 'scale-95' : 'active:scale-95'
-                }`}
-              >
-                {loading ? (
-                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                    <path
-                      fill="#EA4335"
-                      d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.48 14.98 1 12 1 7.35 1 3.37 3.68 1.41 7.59l3.8 2.94C6.15 7.15 8.86 5.04 12 5.04z"
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-bold mb-1 uppercase tracking-wider">
+                      Contraseña (mínimo 6 caracteres)
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3.5 text-slate-800 text-xs focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
                     />
-                    <path
-                      fill="#4285F4"
-                      d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.46c-.28 1.48-1.11 2.73-2.35 3.57l3.72 2.87c2.18-2.01 3.66-4.97 3.66-8.54z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.21 10.53c-.24-.72-.38-1.49-.38-2.28s.14-1.56.38-2.28L1.41 3.59C.51 5.39 0 7.39 0 9.5s.51 4.11 1.41 5.91l3.8-2.88z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 18.96c-3.14 0-5.85-2.11-6.79-5.49l-3.8 2.88c1.96 3.91 5.94 6.59 10.59 6.59 2.98 0 5.66-1 7.55-2.71l-3.72-2.87c-1.03.68-2.35 1.1-4.03 1.1z"
-                    />
-                  </svg>
-                )}
-                <span>Conectar con Google</span>
-              </button>
+                  </div>
 
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[10.5px] text-slate-550 leading-relaxed text-center">
-                🛡️ <em>Requiere una cuenta de Google para garantizar la confianza en el servicio.</em>
-              </div>
+                  <div className="flex items-center justify-between text-xs pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsSignUp(!isSignUp)}
+                      className="text-blue-600 hover:text-blue-700 font-bold underline cursor-pointer"
+                    >
+                      {isSignUp ? "Ya tengo cuenta (Iniciar sesión)" : "¿No tienes cuenta? Regístrate aquí"}
+                    </button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className={`w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                      loading ? 'scale-95' : 'active:scale-95'
+                    }`}
+                  >
+                    {loading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : null}
+                    <span>{isSignUp ? "Registrarse como Mototaxista" : "Iniciar Sesión"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowClassicAuth(false);
+                      setError(null);
+                    }}
+                    className="w-full text-slate-500 hover:text-slate-700 text-[11px] font-bold text-center underline block cursor-pointer"
+                  >
+                    ← Volver a Conectar con Google
+                  </button>
+                </form>
+              ) : (
+                /* GOOGLE SIGN IN INTERFACE */
+                <>
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-yellow-400/10 border border-yellow-350 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 shadow-sm text-center"
+                  >
+                    <p className="font-bold text-yellow-800 flex items-center justify-center gap-1.5 text-xs">
+                      <span>⚠️</span> Registro Obligatorio con Google / Correo
+                    </p>
+                  </motion.div>
+
+                  <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
+                    Paso 2: Conéctate con Google
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={loading}
+                    className={`w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                      loading ? 'scale-95' : 'active:scale-95'
+                    }`}
+                  >
+                    {loading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.48 14.98 1 12 1 7.35 1 3.37 3.68 1.41 7.59l3.8 2.94C6.15 7.15 8.86 5.04 12 5.04z"
+                        />
+                        <path
+                          fill="#4285F4"
+                          d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.46c-.28 1.48-1.11 2.73-2.35 3.57l3.72 2.87c2.18-2.01 3.66-4.97 3.66-8.54z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.21 10.53c-.24-.72-.38-1.49-.38-2.28s.14-1.56.38-2.28L1.41 3.59C.51 5.39 0 7.39 0 9.5s.51 4.11 1.41 5.91l3.8-2.88z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 18.96c-3.14 0-5.85-2.11-6.79-5.49l-3.8 2.88c1.96 3.91 5.94 6.59 10.59 6.59 2.98 0 5.66-1 7.55-2.71l-3.72-2.87c-1.03.68-2.35 1.1-4.03 1.1z"
+                        />
+                      </svg>
+                    )}
+                    <span>Conectar con Google</span>
+                  </button>
+
+                  <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[10.5px] text-slate-550 leading-relaxed text-center">
+                    🛡️ <em>Requiere una cuenta de Google para garantizar la confianza en el servicio.</em>
+                  </div>
+
+                  <div className="text-center pt-1.55">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClassicAuth(true);
+                        setIsSignUp(false);
+                        setError(null);
+                      }}
+                      className="text-blue-600 hover:text-blue-700 font-bold text-xs underline cursor-pointer"
+                    >
+                      💡 ¿No te funciona Google? Usa tu Correo y Contraseña aquí
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           ) : (
             <>
-              <motion.div
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-emerald-500/10 border border-emerald-200 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 text-center"
-              >
-                <p className="font-medium text-emerald-800 font-bold">
-                  🎉 El servicio para <strong>Clientes</strong> es 100% gratuito y libre de cargos.
-                </p>
-              </motion.div>
+              {showClassicAuth ? (
+                /* EMAIL PASSWORD BACK-UP INTERFACE FOR CLIENTS */
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div className="bg-emerald-500/10 border border-emerald-200 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 text-center">
+                    <p className="font-bold text-emerald-800">
+                      ✉️ Registro / Acceso con Correo para Clientes
+                    </p>
+                  </div>
 
-              <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
-                Paso 2: Conéctate al Instante
-              </label>
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-bold mb-1 uppercase tracking-wider">
+                      Correo Electrónico
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="ejemplo@correo.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3.5 text-slate-800 text-xs focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
+                    />
+                  </div>
 
-              <button
-                type="button"
-                onClick={handleAnonymousSignIn}
-                disabled={loading}
-                className={`w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
-                  loading ? 'scale-95' : 'active:scale-95'
-                }`}
-              >
-                {loading ? (
-                  <span className="inline-block w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <Sparkles className="w-5 h-5 text-slate-900" />
-                )}
-                <span>Entrar como Cliente</span>
-              </button>
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-bold mb-1 uppercase tracking-wider">
+                      Contraseña (mínimo 6 caracteres)
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3.5 text-slate-800 text-xs focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
+                    />
+                  </div>
 
-              <p className="text-center text-[11px] text-slate-550 mt-1 leading-relaxed px-1">
-                ⚡ <strong>100% Libre y Compatible:</strong> Olvídate de registros pesados o contraseñas. Únete de inmediato de forma rápida y sin complicaciones.
-              </p>
+                  <div className="flex items-center justify-between text-xs pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsSignUp(!isSignUp)}
+                      className="text-blue-600 hover:text-blue-700 font-bold underline cursor-pointer"
+                    >
+                      {isSignUp ? "Ya tengo cuenta (Iniciar sesión)" : "¿No tienes cuenta? Regístrate aquí"}
+                    </button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className={`w-full bg-[#10B981] hover:bg-emerald-600 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                      loading ? 'scale-95' : 'active:scale-95'
+                    }`}
+                  >
+                    {loading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : null}
+                    <span>{isSignUp ? "Registrarse como Cliente" : "Iniciar Sesión"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowClassicAuth(false);
+                      setError(null);
+                    }}
+                    className="w-full text-slate-500 hover:text-slate-700 text-[11px] font-bold text-center underline block cursor-pointer"
+                  >
+                    ← Volver a Conexión Rápida
+                  </button>
+                </form>
+              ) : (
+                /* INSTANT CLIENT CONNECT */
+                <>
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-emerald-500/10 border border-emerald-200 p-3 rounded-2xl text-[11px] text-slate-700 leading-relaxed mb-1 text-center"
+                  >
+                    <p className="font-medium text-emerald-800 font-bold">
+                      🎉 El servicio para <strong>Clientes</strong> es 100% gratuito y libre de cargos.
+                    </p>
+                  </motion.div>
+
+                  <label className="block text-slate-600 text-xs font-bold mb-1 uppercase tracking-wider text-center">
+                    Paso 2: Conéctate al Instante
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleAnonymousSignIn}
+                    disabled={loading}
+                    className={`w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold text-xs uppercase tracking-wider py-4 px-4 rounded-2xl shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer ${
+                      loading ? 'scale-95' : 'active:scale-95'
+                    }`}
+                  >
+                    {loading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Sparkles className="w-5 h-5 text-slate-900" />
+                    )}
+                    <span>Entrar como Cliente</span>
+                  </button>
+
+                  <p className="text-center text-[11px] text-slate-550 mt-1 leading-relaxed px-1">
+                    ⚡ <strong>100% Libre y Compatible:</strong> Olvídate de registros pesados o contraseñas. Únete de inmediato de forma rápida y sin complicaciones.
+                  </p>
+
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClassicAuth(true);
+                        setIsSignUp(false);
+                        setError(null);
+                      }}
+                      className="text-blue-600 hover:text-blue-700 font-bold text-xs underline cursor-pointer"
+                    >
+                      💡 ¿Prefieres usar Correo y Contraseña? Haz clic aquí
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>

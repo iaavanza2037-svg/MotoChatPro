@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -32,8 +32,11 @@ export interface FirestoreErrorInfo {
 // Initialize firebase app
 const app = initializeApp(firebaseConfig);
 
-// Initialize Auth
+// Initialize Auth and configure local persistence
 export const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn("Failed to set auth persistence:", err);
+});
 
 // Initialize Firestore (utilizing firestoreDatabaseId is CRITICAL)
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);

@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signInAnonymously } from 'firebase/auth';
 import { setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { User, LogIn, Mail, Lock, Shield, UserCheck, AlertCircle, Sparkles } from 'lucide-react';
@@ -34,7 +34,9 @@ export default function Login({ onAuthSuccess }: LoginProps) {
     const saved = localStorage.getItem('moto_chat_pending_registration');
     return (saved === 'moto' || saved === 'cliente') ? saved : 'cliente';
   });
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => {
+    return localStorage.getItem('moto_chat_saved_name') || '';
+  });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedZone, setSelectedZone] = useState('Langue (Centro)');
@@ -56,16 +58,25 @@ export default function Login({ onAuthSuccess }: LoginProps) {
 
   const handleAnonymousSignIn = async () => {
     setError(null);
+    const trimmedName = name.trim();
+    if (role === 'cliente' && !trimmedName) {
+      setError('Por favor, ingresa tu nombre. Es obligatorio para poder ingresar como Cliente.');
+      return;
+    }
+
     setLoading(true);
     localStorage.setItem('moto_chat_pending_registration', role);
     try {
+      if (trimmedName) {
+        localStorage.setItem('moto_chat_saved_name', trimmedName);
+      }
       const credential = await signInAnonymously(auth);
       const user = credential.user;
       
       const userDocRef = doc(db, 'users', user.uid);
       const userDocSnap = await getDoc(userDocRef);
       
-      const customName = name.trim() || (role === 'cliente' ? `Pasajero_${Math.floor(1000 + Math.random() * 9000)}` : `Mototaxista_${Math.floor(1000 + Math.random() * 9000)}`);
+      const customName = trimmedName || (role === 'cliente' ? `Pasajero_${Math.floor(1000 + Math.random() * 9000)}` : `Mototaxista_${Math.floor(1000 + Math.random() * 9000)}`);
       const finalZone = selectedZone === 'Otro' ? (customZone.trim() || 'Langue (Centro)') : selectedZone;
       
       if (!userDocSnap.exists()) {
@@ -184,18 +195,60 @@ export default function Login({ onAuthSuccess }: LoginProps) {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    const trimmedName = name.trim();
+    if (role === 'cliente' && !trimmedName) {
+      setError('Por favor, ingresa tu nombre. Es obligatorio para poder ingresar como Cliente.');
+      return;
+    }
+
     setLoading(true);
     localStorage.setItem('moto_chat_pending_registration', role);
     try {
+      if (trimmedName) {
+        localStorage.setItem('moto_chat_saved_name', trimmedName);
+      }
+      localStorage.setItem('moto_chat_saved_zone', selectedZone);
+      localStorage.setItem('moto_chat_saved_custom_zone', customZone);
+
       const provider = new GoogleAuthProvider();
-      // Use signInWithPopup since preview is inside sandboxed iframe
-      const credential = await signInWithPopup(auth, provider);
-      const user = credential.user;
       
+      const isStandalone = (window.navigator as any).standalone || window.matchMedia('(display-mode: standalone)').matches;
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      let credential = null;
+
+      if (isMobileDevice && !isStandalone) {
+        // Standard mobile browser: use direct redirect
+        console.log("Iniciando redirección de Google para navegador móvil.");
+        localStorage.setItem('moto_chat_redirect_active', 'true');
+        await signInWithRedirect(auth, provider);
+        return; // Page is redirecting
+      }
+
+      // Standalone PWA or Desktop: try popup first
+      try {
+        console.log("Iniciando selector emergente de Google (PWA Standalone o Escritorio).");
+        credential = await signInWithPopup(auth, provider);
+      } catch (popupErr: any) {
+        console.warn("Fallo en signInWithPopup, probando redirección como respaldo:", popupErr);
+        if (isMobileDevice) {
+          localStorage.setItem('moto_chat_redirect_active', 'true');
+          await signInWithRedirect(auth, provider);
+          return;
+        } else {
+          throw popupErr;
+        }
+      }
+
+      if (!credential) {
+        throw new Error("No se pudo obtener las credenciales de autenticación.");
+      }
+
+      const user = credential.user;
       const userDocRef = doc(db, 'users', user.uid);
       const userDocSnap = await getDoc(userDocRef);
       
-      const displayName = name.trim() || userDocSnap.data()?.name || user.displayName || user.email?.split('@')[0] || 'Usuario';
+      const displayName = trimmedName || userDocSnap.data()?.name || user.displayName || user.email?.split('@')[0] || 'Usuario';
       const finalZone = selectedZone === 'Otro' ? (customZone.trim() || 'Langue (Centro)') : selectedZone;
       
       await setDoc(userDocRef, {
@@ -209,10 +262,13 @@ export default function Login({ onAuthSuccess }: LoginProps) {
       }, { merge: true });
       
       localStorage.removeItem('moto_chat_pending_registration');
+      localStorage.removeItem('moto_chat_saved_name');
+      localStorage.removeItem('moto_chat_saved_zone');
+      localStorage.removeItem('moto_chat_saved_custom_zone');
+      localStorage.removeItem('moto_chat_redirect_active');
       onAuthSuccess();
     } catch (err: any) {
-      localStorage.removeItem('moto_chat_pending_registration');
-      console.error(err);
+      console.error("Error en inicio de sesión de Google:", err);
       let localizedMsg = 'Ocurrió un error con el inicio de sesión de Google.';
       if (err.code === 'auth/popup-blocked') {
         localizedMsg = 'El navegador bloqueó la ventana emergente de Google. Por favor, permite ventanas emergentes para MotoChatPro.';
@@ -417,21 +473,39 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           </div>
         </div>
 
-        {/* STEP 1.5: Customize Name (Optional) */}
-        <div className="mb-6 bg-slate-50 border border-slate-200 p-3.5 rounded-2xl">
+        {/* STEP 1.5: Customize Name (Required for Cliente, Optional for Mototaxista) */}
+        <div className={`mb-6 p-3.5 rounded-2xl border transition-all duration-300 ${
+          role === 'cliente' 
+            ? 'bg-yellow-450/5 border-yellow-300 ring-1 ring-yellow-400/20' 
+            : 'bg-slate-50 border-slate-200'
+        }`}>
           <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider text-center flex items-center justify-center gap-1.5">
-            <User className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-            Tu Nombre (Opcional)
+            <User className={`w-3.5 h-3.5 shrink-0 ${role === 'cliente' ? 'text-amber-500' : 'text-yellow-500'}`} />
+            {role === 'cliente' ? 'Tu Nombre (Obligatorio)' : 'Tu Nombre (Opcional)'}
           </label>
           <input
             type="text"
-            placeholder="Ej: Pedro Navaja / Moto Rápida"
+            required={role === 'cliente'}
+            placeholder={role === 'cliente' ? "Escribe tu nombre para iniciar" : "Ej: Pedro Navaja / Moto Rápida"}
             value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full text-center bg-white border border-slate-200 rounded-xl py-2 px-3 text-slate-800 text-xs placeholder-slate-400 focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 font-semibold"
+            onChange={(e) => {
+              setName(e.target.value);
+              // Proactively clear error if they start typing
+              if (error && role === 'cliente' && e.target.value.trim()) {
+                setError(null);
+              }
+            }}
+            className={`w-full text-center bg-white border rounded-xl py-2 px-3 text-slate-800 text-xs placeholder-slate-400 focus:outline-none focus:ring-1 font-semibold transition-all ${
+              role === 'cliente' && !name.trim()
+                ? 'border-yellow-400/80 focus:border-yellow-400 focus:ring-yellow-400 bg-yellow-50/5'
+                : 'border-slate-200 focus:border-yellow-400 focus:ring-yellow-400'
+            }`}
           />
           <p className="text-center text-[9px] text-slate-400 mt-1.5 leading-tight">
-            ¿Quieres cambiar o usar un nombre personalizado? Escríbelo aquí antes de conectar.
+            {role === 'cliente' 
+              ? '⚠️ Para pedir viajes es obligatorio ingresar tu nombre de cliente.'
+              : '¿Quieres usar un nombre personalizado? Escríbelo aquí antes de conectar.'
+            }
           </p>
         </div>
 

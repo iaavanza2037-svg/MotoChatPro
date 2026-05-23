@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, getRedirectResult } from 'firebase/auth';
 import { 
   doc, 
   setDoc, 
@@ -87,6 +87,7 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [authChecking, setAuthChecking] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [redirectResultChecked, setRedirectResultChecked] = useState(false);
 
   // Sound notification tracking refs
   const lastSessionMessageTimeRef = useRef<{ [chatId: string]: number }>({});
@@ -122,6 +123,105 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Handle Google Sign-In redirect result asynchronously in the background
+  useEffect(() => {
+    async function handleGoogleRedirectResult() {
+      try {
+        const result = await getRedirectResult(auth);
+        
+        // El usuario puede haber iniciado sesión, ya sea a través de getRedirectResult o porque ya estaba en auth
+        const user = result?.user || auth.currentUser;
+        if (user) {
+          console.log("Sesión activa detectada en redirección de Google:", user.uid);
+          
+          const userProfileRef = doc(db, 'users', user.uid);
+          const userDocSnap = await getDoc(userProfileRef);
+          
+          if (!userDocSnap.exists()) {
+            const savedRole = localStorage.getItem('moto_chat_pending_registration') || 'cliente';
+            const savedName = localStorage.getItem('moto_chat_saved_name') || '';
+            const savedZone = localStorage.getItem('moto_chat_saved_zone') || 'Langue (Centro)';
+            const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
+
+            const displayName = savedName.trim() || user.displayName || user.email?.split('@')[0] || 'Usuario';
+            const finalZone = savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone;
+
+            await setDoc(userProfileRef, {
+              uid: user.uid,
+              email: user.email || '',
+              name: displayName,
+              role: savedRole,
+              zone: finalZone,
+              isOnline: true,
+              lastActive: Date.now()
+            }, { merge: true });
+            console.log("Perfil del usuario guardado correctamente.");
+          }
+          
+          // Limpiar datos temporales de registro
+          localStorage.removeItem('moto_chat_pending_registration');
+          localStorage.removeItem('moto_chat_saved_name');
+          localStorage.removeItem('moto_chat_saved_zone');
+          localStorage.removeItem('moto_chat_saved_custom_zone');
+          localStorage.removeItem('moto_chat_redirect_active');
+        }
+      } catch (err: any) {
+        console.error("Error al procesar el resultado de la redirección de Google:", err);
+        
+        // Soporte robusto en caso de error de cookies o de sesión sessionStorage inaccesible en sandbox/celular
+        // pero donde la autenticación REAL sí se completó y onAuthStateChanged recuperó el currentUser
+        const user = auth.currentUser;
+        if (user) {
+          try {
+            console.log("Error de redirección detectado, pero auth de Firebase está logueado. Creando perfil con datos guardados.");
+            const userProfileRef = doc(db, 'users', user.uid);
+            const userDocSnap = await getDoc(userProfileRef);
+            
+            if (!userDocSnap.exists()) {
+              const savedRole = localStorage.getItem('moto_chat_pending_registration') || 'cliente';
+              const savedName = localStorage.getItem('moto_chat_saved_name') || '';
+              const savedZone = localStorage.getItem('moto_chat_saved_zone') || 'Langue (Centro)';
+              const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
+
+              const displayName = savedName.trim() || user.displayName || user.email?.split('@')[0] || 'Usuario';
+              const finalZone = savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone;
+
+              await setDoc(userProfileRef, {
+                uid: user.uid,
+                email: user.email || '',
+                name: displayName,
+                role: savedRole,
+                zone: finalZone,
+                isOnline: true,
+                lastActive: Date.now()
+              }, { merge: true });
+              console.log("Perfil de respaldo creado con éxito después del error.");
+              
+              localStorage.removeItem('moto_chat_pending_registration');
+              localStorage.removeItem('moto_chat_saved_name');
+              localStorage.removeItem('moto_chat_saved_zone');
+              localStorage.removeItem('moto_chat_saved_custom_zone');
+              localStorage.removeItem('moto_chat_redirect_active');
+            } else {
+              // Si el perfil ya existe en Firestore, limpia los metadatos temporales de registro
+              localStorage.removeItem('moto_chat_pending_registration');
+              localStorage.removeItem('moto_chat_saved_name');
+              localStorage.removeItem('moto_chat_saved_zone');
+              localStorage.removeItem('moto_chat_saved_custom_zone');
+              localStorage.removeItem('moto_chat_redirect_active');
+            }
+          } catch (innerErr) {
+            console.error("Error al crear perfil de respaldo:", innerErr);
+          }
+        }
+      } finally {
+        setRedirectResultChecked(true);
+      }
+    }
+
+    handleGoogleRedirectResult();
+  }, []);
+
   // Listen to User Profile changes and manage dynamic Presence Heartbeat
   useEffect(() => {
     if (!currentUser) return;
@@ -138,8 +238,53 @@ export default function App() {
         // Doing so would race with Login.tsx and freeze the user's role choice under immutable rules.
         const isPending = localStorage.getItem('moto_chat_pending_registration');
         if (isPending) {
-          console.log("Registration in progress, deferring fallback profile creation.");
-          setAuthChecking(false);
+          const isRedirectActive = localStorage.getItem('moto_chat_redirect_active') === 'true';
+          
+          if (isRedirectActive && !redirectResultChecked) {
+            console.log("Chequeo de redirección de Google activo en progreso. Manteniendo indicador de carga...");
+            return; // Esperar a que se complete getRedirectResult
+          }
+          
+          if (isRedirectActive && redirectResultChecked) {
+            console.log("Redirect check finished, but profile does not exist. Writing fallback using registration values.");
+            
+            const savedRole = (isPending === 'moto' || isPending === 'cliente') ? isPending : 'cliente';
+            const savedName = localStorage.getItem('moto_chat_saved_name') || '';
+            const savedZone = localStorage.getItem('moto_chat_saved_zone') || 'Langue (Centro)';
+            const savedCustomZone = localStorage.getItem('moto_chat_saved_custom_zone') || '';
+
+            const displayName = savedName.trim() || currentUser.displayName || currentUser.email?.split('@')[0] || 'Usuario';
+            const finalZone = savedZone === 'Otro' ? (savedCustomZone.trim() || 'Langue (Centro)') : savedZone;
+
+            const initialProfile: UserProfile = {
+              uid: currentUser.uid,
+              email: currentUser.email || '',
+              name: displayName,
+              role: savedRole as 'cliente' | 'moto',
+              zone: finalZone,
+              isOnline: true,
+              lastActive: Date.now()
+            };
+
+            setDoc(userProfileRef, initialProfile, { merge: true })
+              .then(() => {
+                setUserProfile(initialProfile);
+                setAuthChecking(false);
+                // Clean temporary flags once saved
+                localStorage.removeItem('moto_chat_pending_registration');
+                localStorage.removeItem('moto_chat_saved_name');
+                localStorage.removeItem('moto_chat_saved_zone');
+                localStorage.removeItem('moto_chat_saved_custom_zone');
+                localStorage.removeItem('moto_chat_redirect_active');
+              })
+              .catch((err) => {
+                handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+                setAuthChecking(false);
+              });
+          } else {
+            console.log("Registration in progress, deferring fallback profile creation.");
+            setAuthChecking(false);
+          }
           return;
         }
 
@@ -205,7 +350,7 @@ export default function App() {
         lastActive: Date.now()
       }).catch(() => {});
     };
-  }, [currentUser]);
+  }, [currentUser, redirectResultChecked]);
 
   // Keep track of active users online (visible in mode presence)
   useEffect(() => {

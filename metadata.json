@@ -1,0 +1,6 @@
+{
+  "name": "Moto Chat",
+  "description": "Una aplicación de chat en tiempo real para servicio de mototaxis, con inicio de sesión por correo, estado en línea, teclado de caracteres especiales y transferencia de servicios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

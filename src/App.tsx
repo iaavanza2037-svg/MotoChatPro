@@ -1,0 +1,703 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  collection, 
+  query, 
+  where, 
+  onSnapshot, 
+  addDoc, 
+  getDoc,
+  getDocFromServer,
+  deleteDoc,
+  getDocs
+} from 'firebase/firestore';
+import { motion, AnimatePresence } from 'motion/react';
+import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { UserProfile, ChatSession, ChatMessage } from './types';
+import Login from './components/Login';
+import Sidebar from './components/Sidebar';
+import ChatWindow from './components/ChatWindow';
+import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2 } from 'lucide-react';
+
+export default function App() {
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>([]);
+  const [chats, setChats] = useState<ChatSession[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [authChecking, setAuthChecking] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Connection tester
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, '_test_connection_path_', 'initial'));
+      } catch (error: any) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          setConnectionError("La base de datos está desconectada. Por favor verifica la red.");
+        }
+      }
+    }
+    testConnection();
+  }, []);
+
+  // Track Firebase Authentication State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (userInstance) => {
+      setCurrentUser(userInstance);
+      if (!userInstance) {
+        setUserProfile(null);
+        setChats([]);
+        setMessages([]);
+        setSelectedChatId(null);
+        setAuthChecking(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Listen to User Profile changes and manage dynamic Presence Heartbeat
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const userProfileRef = doc(db, 'users', currentUser.uid);
+
+    // Watch profile doc
+    const unsubProfile = onSnapshot(userProfileRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setUserProfile(snapshot.data() as UserProfile);
+        setAuthChecking(false);
+      } else {
+        // If a registration is explicitly in progress, do NOT write fallback profile.
+        // Doing so would race with Login.tsx and freeze the user's role choice under immutable rules.
+        const isPending = localStorage.getItem('moto_chat_pending_registration');
+        if (isPending) {
+          console.log("Registration in progress, deferring fallback profile creation.");
+          setAuthChecking(false);
+          return;
+        }
+
+        // Fallback user profile setup if none exists
+        const email = currentUser.email || '';
+        const fallbackName = email.split('@')[0] || 'Usuario';
+        const initialProfile: UserProfile = {
+          uid: currentUser.uid,
+          email,
+          name: fallbackName,
+          role: 'cliente',
+          isOnline: true,
+          lastActive: Date.now()
+        };
+        setDoc(userProfileRef, initialProfile, { merge: true })
+          .then(() => {
+            setUserProfile(initialProfile);
+            setAuthChecking(false);
+          })
+          .catch((err) => {
+            handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+            setAuthChecking(false);
+          });
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${currentUser.uid}`);
+      setAuthChecking(false);
+    });
+
+    // Establish periodic heartbeat to report online status on Firestore
+    const heartbeat = setInterval(async () => {
+      try {
+        await updateDoc(userProfileRef, {
+          isOnline: true,
+          lastActive: Date.now()
+        });
+      } catch (error) {
+        console.warn("Heartbeat update failed. Retrying on next cycle.", error);
+      }
+    }, 20000); // every 20 seconds
+
+    // Unload presence write
+    const handleUnloadOffline = () => {
+      updateDoc(userProfileRef, {
+        isOnline: false,
+        lastActive: Date.now()
+      }).catch(() => {});
+    };
+
+    window.addEventListener('beforeunload', handleUnloadOffline);
+    window.addEventListener('unload', handleUnloadOffline);
+
+    return () => {
+      clearInterval(heartbeat);
+      unsubProfile();
+      window.removeEventListener('beforeunload', handleUnloadOffline);
+      window.removeEventListener('unload', handleUnloadOffline);
+      
+      // Attempt clean disconnect marking
+      updateDoc(userProfileRef, {
+        isOnline: false,
+        lastActive: Date.now()
+      }).catch(() => {});
+    };
+  }, [currentUser]);
+
+  // Keep track of active users online (visible in mode presence)
+  useEffect(() => {
+    if (!currentUser || !userProfile) return;
+
+    const usersQuery = query(
+      collection(db, 'users'),
+      where('isOnline', '==', true)
+    );
+
+    const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
+      const list = snapshot.docs.map(d => d.data() as UserProfile);
+      // Filter clientside to only users who checked in with heartbeat within 45 seconds
+      const activePulseList = list.filter(u => Date.now() - u.lastActive < 45000);
+      setOnlineUsers(activePulseList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'users');
+    });
+
+    return () => unsubUsers();
+  }, [currentUser, userProfile]);
+
+  // Listen to Chat Sessions according to user role
+  useEffect(() => {
+    if (!currentUser || !userProfile) return;
+
+    const keyField = userProfile.role === 'moto' ? 'driverId' : 'clientId';
+    const chatsQuery = query(
+      collection(db, 'chats'),
+      where(keyField, '==', currentUser.uid)
+    );
+
+    const unsubChats = onSnapshot(chatsQuery, (snapshot) => {
+      const list = snapshot.docs.map(d => d.data() as ChatSession);
+      // Filter out chats that are logically deleted for this user
+      const filteredList = list.filter(chat => {
+        if (userProfile.role === 'moto') {
+          return !chat.driverDeleted;
+        } else {
+          return !chat.clientDeleted;
+        }
+      });
+      // Sort chats descending by lastMessageTime
+      filteredList.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+      setChats(filteredList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'chats');
+    });
+
+    return () => unsubChats();
+  }, [currentUser, userProfile]);
+
+  // Monitor peers in chats and trigger automatic 5s complete deletion if peer of an active chat goes offline
+  useEffect(() => {
+    if (!currentUser || !userProfile || chats.length === 0) return;
+
+    const timers: { [chatId: string]: any } = {};
+
+    chats.forEach((chat) => {
+      // Find the ID of the other user in the chat
+      const peerId = userProfile.role === 'cliente' ? chat.driverId : chat.clientId;
+      const isPeerOnline = onlineUsers.some(u => u.uid === peerId);
+
+      // We only care about open chats
+      if (chat.status === 'open') {
+        if (!isPeerOnline) {
+          // If Peer is offline, we completely delete this chat after 5 seconds
+          timers[chat.id] = setTimeout(async () => {
+            try {
+              // 1. Deselect instantly if active to prevent blank views
+              if (selectedChatId === chat.id) {
+                setSelectedChatId(null);
+              }
+
+              // 2. Delete messages subcollection first (so rules find parent chat and permit it)
+              const snapshot = await getDocs(collection(db, `chats/${chat.id}/messages`));
+              if (snapshot && !snapshot.empty) {
+                const deletePromises = snapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
+                await Promise.all(deletePromises);
+              }
+
+              // 3. Delete parent chat session document
+              await deleteDoc(doc(db, 'chats', chat.id));
+
+              console.log(`Chat ${chat.id} automatically deleted completely 5 seconds after peer went offline.`);
+            } catch (err) {
+              console.warn("Failed to auto-delete chat", err);
+            }
+          }, 5000);
+        }
+      }
+    });
+
+    return () => {
+      Object.values(timers).forEach(t => clearTimeout(t));
+    };
+  }, [chats, onlineUsers, currentUser, userProfile, selectedChatId]);
+
+  // Listen to messages for the active selected chat
+  useEffect(() => {
+    if (!currentUser || !selectedChatId) {
+      setMessages([]);
+      return;
+    }
+
+    const messagesCollectionRef = collection(db, `chats/${selectedChatId}/messages`);
+    
+    const unsubMessages = onSnapshot(messagesCollectionRef, (snapshot) => {
+      const list = snapshot.docs.map(d => d.data() as ChatMessage);
+      // Sort message list chronologically
+      list.sort((a, b) => a.timestamp - b.timestamp);
+      setMessages(list);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `chats/${selectedChatId}/messages`);
+    });
+
+    return () => unsubMessages();
+  }, [currentUser, selectedChatId]);
+
+  // Action: Select or start a chat with an online user (Client only starts, or Driver selected client)
+  const handleSelectUser = async (targetUser: UserProfile) => {
+    if (!userProfile) return;
+
+    const clientId = userProfile.role === 'cliente' ? userProfile.uid : targetUser.uid;
+    const clientName = userProfile.role === 'cliente' ? userProfile.name : targetUser.name;
+    const clientEmail = userProfile.role === 'cliente' ? userProfile.email : targetUser.email;
+
+    const driverId = userProfile.role === 'moto' ? userProfile.uid : targetUser.uid;
+    const driverName = userProfile.role === 'moto' ? userProfile.name : targetUser.name;
+    const driverEmail = userProfile.role === 'moto' ? userProfile.email : targetUser.email;
+
+    const chatId = `${clientId}_${driverId}`;
+
+    // Initialize or merge Chat Session doc in Firestore safely.
+    // We ALWAYS reset logical deletions, set status back to open and mark it as NOT rated for new requests!
+    const chatDocRef = doc(db, 'chats', chatId);
+    const initialOrRestoredChat: ChatSession = {
+      id: chatId,
+      clientId,
+      clientName,
+      clientEmail,
+      driverId,
+      driverName,
+      driverEmail,
+      status: 'open',
+      clientDeleted: false,
+      driverDeleted: false,
+      isRated: false,
+      lastMessage: 'Servicio iniciado o restaurado. Esperando mensajes...',
+      lastMessageTime: Date.now()
+    };
+
+    try {
+      await setDoc(chatDocRef, initialOrRestoredChat, { merge: true });
+      // Set selectedChatId ONLY after the document is successfully stored in Firestore so that permissions succeed.
+      setSelectedChatId(chatId);
+    } catch (err) {
+      console.warn("Background chat document creation/restoration error, setting client-side state anyway:", err);
+      setSelectedChatId(chatId);
+    }
+  };
+
+  const handleSelectChat = async (chat: ChatSession) => {
+    if (!userProfile) return;
+    try {
+      const chatDocRef = doc(db, 'chats', chat.id);
+      const updates: Partial<ChatSession> = userProfile.role === 'moto'
+        ? { driverDeleted: false }
+        : { clientDeleted: false };
+      await updateDoc(chatDocRef, updates);
+      // Set selectedChatId ONLY after updates are successfully updated in Firestore so that permissions succeed.
+      setSelectedChatId(chat.id);
+    } catch (e) {
+      console.warn("Could not un-delete chat on selection, setting client-side state anyway:", e);
+      setSelectedChatId(chat.id);
+    }
+  };
+
+  // Action: Send a active chat message
+  const handleSendMessage = async (text: string) => {
+    if (!selectedChatId || !userProfile || !currentUser) return;
+
+    const chatId = selectedChatId;
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const newMessagePayload: ChatMessage = {
+      id: messageId,
+      chatId,
+      text: text.trim(),
+      senderId: currentUser.uid,
+      senderName: userProfile.name,
+      timestamp: Date.now(),
+      type: 'text'
+    };
+
+    try {
+      // 1. Write the message Doc first as that's permission safe
+      await setDoc(doc(db, `chats/${chatId}/messages`, messageId), newMessagePayload);
+
+      // 2. Perform safe merge setDoc update on parent session to guarantee existence and refresh counters
+      const chatDocRef = doc(db, 'chats', chatId);
+      await setDoc(chatDocRef, {
+        lastMessage: text.trim(),
+        lastMessageTime: Date.now(),
+        clientDeleted: false,
+        driverDeleted: false
+      }, { merge: true });
+
+      setInputText('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${chatId}/messages/${messageId}`);
+    }
+  };
+
+  // Action: Transfer Chat to other driver (only available for Moto)
+  const handleTransferChat = async (targetDriver: UserProfile) => {
+    if (!selectedChatId || !userProfile || userProfile.role !== 'moto') return;
+
+    const chatId = selectedChatId;
+    const chatDocRef = doc(db, 'chats', chatId);
+
+    try {
+      const chatDocSnap = await getDoc(chatDocRef);
+      if (!chatDocSnap.exists()) return;
+
+      const chatSession = chatDocSnap.data() as ChatSession;
+      
+      // Update Driver details on the main session
+      await updateDoc(chatDocRef, {
+        driverId: targetDriver.uid,
+        driverName: targetDriver.name,
+        driverEmail: targetDriver.email,
+        status: 'transferred',
+        lastMessage: `⚠️ Servicio transferido a ${targetDriver.name}`,
+        lastMessageTime: Date.now()
+      });
+
+      // Append System Message to state logs
+      const systemMessageId = `msg_sys_${Date.now()}`;
+      const systemMessagePayload: ChatMessage = {
+        id: systemMessageId,
+        chatId,
+        text: `El servicio y chat han sido transferidos a ${targetDriver.name}`,
+        senderId: 'system',
+        senderName: 'Sistema',
+        timestamp: Date.now(),
+        type: 'system'
+      };
+
+      await setDoc(doc(db, `chats/${chatId}/messages`, systemMessageId), systemMessagePayload);
+      
+      // Alert and Deselect
+      alert(`Servicio transferido exitosamente al conductor en línea: ${targetDriver.name}`);
+      setSelectedChatId(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${chatId}`);
+    }
+  };
+
+  // Action: Delete Chat (selective logic for cliente and moto)
+  const handleDeleteChat = async (chatId: string) => {
+    if (!userProfile) return;
+    // Optimistic UI update: instantly close the chat panel
+    setSelectedChatId(null);
+    try {
+      const chatDocRef = doc(db, 'chats', chatId);
+      const chatSnap = await getDoc(chatDocRef);
+      if (!chatSnap.exists()) return;
+
+      const chatData = chatSnap.data() as ChatSession;
+      const isDriver = userProfile.role === 'moto';
+
+      const otherSideDeleted = isDriver
+        ? chatData.clientDeleted === true
+        : chatData.driverDeleted === true;
+
+      if (otherSideDeleted) {
+        // Both sides want to delete, so clear messages and erase doc completely
+        try {
+          const snapshot = await getDocs(collection(db, `chats/${chatId}/messages`));
+          if (snapshot && !snapshot.empty) {
+            const deletePromises = snapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
+            await Promise.all(deletePromises);
+          }
+        } catch (err) {
+          console.warn("Messages permanent deletion error:", err);
+        }
+        await deleteDoc(chatDocRef);
+        console.log(`Chat ${chatId} completely purged from Firestore.`);
+      } else {
+        // Only one side deleted it, update logical mark for that user role
+        const updates: Partial<ChatSession> = isDriver
+          ? { driverDeleted: true }
+          : { clientDeleted: true };
+        await updateDoc(chatDocRef, updates);
+        console.log(`Chat ${chatId} logically deleted for role: ${userProfile.role}`);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${chatId}`);
+    }
+  };
+
+  // Action: Complete and close service chat session
+  const handleCloseChat = async (chatId: string) => {
+    try {
+      const chatDocRef = doc(db, 'chats', chatId);
+      await updateDoc(chatDocRef, {
+        status: 'closed',
+        lastMessage: '✅ Servicio finalizado con éxito.',
+        lastMessageTime: Date.now()
+      });
+
+      // Insert system message inside subcollection
+      const systemMessageId = `msg_sys_${Date.now()}`;
+      const systemMessagePayload: ChatMessage = {
+        id: systemMessageId,
+        chatId,
+        text: 'El servicio ha sido finalizado correctamente.',
+        senderId: 'system',
+        senderName: 'Sistema',
+        timestamp: Date.now(),
+        type: 'system'
+      };
+      await setDoc(doc(db, `chats/${chatId}/messages`, systemMessageId), systemMessagePayload);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${chatId}`);
+    }
+  };
+
+  // Action: Give a star rating score to the driver and update user profile averages
+  const handleRateDriver = async (chatId: string, driverId: string, stars: number) => {
+    try {
+      // 1. Mark chat status as rated to avoid repeat prompts
+      const chatDocRef = doc(db, 'chats', chatId);
+      await updateDoc(chatDocRef, {
+        isRated: true,
+        lastMessage: `⭐ Calificado con ${stars} estrellas de satisfacción`,
+        lastMessageTime: Date.now()
+      });
+
+      // 2. Transact or write dynamic update to target driver's user profile
+      const driverDocRef = doc(db, 'users', driverId);
+      const driverSnap = await getDoc(driverDocRef);
+
+      if (driverSnap.exists()) {
+        const driverData = driverSnap.data() as UserProfile;
+        const currentCount = driverData.ratingCount || 0;
+        const currentSum = driverData.ratingSum || 0;
+
+        const newCount = currentCount + 1;
+        const newSum = currentSum + stars;
+        const newAverage = newSum / newCount;
+
+        await updateDoc(driverDocRef, {
+          ratingCount: newCount,
+          ratingSum: newSum,
+          averageRating: newAverage
+        });
+        console.log(`Driver profile ${driverId} rating successfully synced. Count: ${newCount}, Avg: ${newAverage}`);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${driverId}`);
+    }
+  };
+
+  // Action: Sign user out and set current user off-status
+  const handleLogout = async () => {
+    setSelectedChatId(null);
+    if (currentUser && userProfile) {
+      try {
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        // Make user offline instantly
+        await updateDoc(userDocRef, {
+          isOnline: false,
+          lastActive: Date.now()
+        }).catch((e) => console.warn(e));
+
+        // Proactively delete open chats in the background (Non-blocking!)
+        const openChats = chats.filter(c => c.status === 'open');
+        openChats.forEach((chat) => {
+          // No await on the top level, let it run in the background
+          getDocs(collection(db, `chats/${chat.id}/messages`))
+            .then((snapshot) => {
+              const deleteMsgs = snapshot && !snapshot.empty
+                ? snapshot.docs.map(docSnap => deleteDoc(docSnap.ref))
+                : [];
+              Promise.all(deleteMsgs)
+                .then(() => {
+                  deleteDoc(doc(db, 'chats', chat.id)).catch((e) => console.warn("Could not background delete chat doc on logout:", e));
+                })
+                .catch((e) => console.warn("Background msg deletion error:", e));
+            })
+            .catch((e) => console.warn("Could not get background messages on logout:", e));
+        });
+      } catch (err) {
+        console.warn("Could not mark user offline on logout.", err);
+      }
+      await signOut(auth);
+    } else if (currentUser) {
+      await signOut(auth);
+    }
+  };
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-[#F7F9FB] flex flex-col items-center justify-center p-4">
+        <motion.div 
+          animate={{ scale: [1, 1.05, 1], rotate: [0, 5, -5, 0] }}
+          transition={{ repeat: Infinity, duration: 2 }}
+          className="text-4xl"
+        >
+          🛵
+        </motion.div>
+        <span className="text-[10px] text-slate-500 font-mono mt-4 tracking-widest animate-pulse font-bold">
+          INICIALIZANDO CONEXIÓN MOTOCHAT...
+        </span>
+      </div>
+    );
+  }
+
+  if (!currentUser || !userProfile) {
+    return <Login onAuthSuccess={() => {}} />;
+  }
+
+  // Find the selected chat session details
+  const activeChat = chats.find(c => c.id === selectedChatId) || (selectedChatId ? {
+    id: selectedChatId,
+    clientId: userProfile.role === 'cliente' ? userProfile.uid : selectedChatId.split('_')[0],
+    clientName: userProfile.role === 'cliente' ? userProfile.name : 'Cliente',
+    clientEmail: userProfile.role === 'cliente' ? userProfile.email : '',
+    driverId: userProfile.role === 'moto' ? userProfile.uid : selectedChatId.split('_')[1],
+    driverName: userProfile.role === 'moto' ? userProfile.name : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.name || 'Mototaxista'),
+    driverEmail: userProfile.role === 'moto' ? userProfile.email : (onlineUsers.find(u => u.uid === selectedChatId.split('_')[1])?.email || ''),
+    status: 'open',
+    lastMessage: 'Servicio iniciado. Esperando mensajes...',
+    lastMessageTime: Date.now()
+  } as ChatSession : undefined);
+
+  let clearedAt = 0;
+  if (activeChat && activeChat.lastMessage && activeChat.lastMessage.startsWith('[clear]:')) {
+    const parts = activeChat.lastMessage.split(':');
+    if (parts.length > 1) {
+      clearedAt = parseInt(parts[1], 10) || 0;
+    }
+  }
+
+  const visibleMessages = messages.filter(m => m.timestamp > clearedAt);
+
+  const partnerId = activeChat ? (userProfile.role === 'moto' ? activeChat.clientId : activeChat.driverId) : '';
+  const partnerProfile = onlineUsers.find(u => u.uid === partnerId);
+
+  return (
+    <div className="h-screen flex bg-[#F7F9FB] text-slate-850 overflow-hidden font-sans relative">
+      {/* Background Watermark/Map */}
+      <div 
+        className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] bg-center bg-no-repeat"
+        style={{ 
+          backgroundImage: 'url(/src/assets/images/langue_map_bg_1779504965708.png)',
+          backgroundSize: '450px',
+        }}
+      />
+
+      {connectionError && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-red-50 border border-red-200 text-red-750 px-4 py-2 rounded-xl text-xs flex items-center gap-2 z-50 shadow-xl font-mono font-bold uppercase">
+          <CircleAlert className="w-4 h-4 text-red-500 animate-pulse shrink-0" />
+          <span>{connectionError}</span>
+        </div>
+      )}
+
+      {/* Roster & Chats panel (Sidebar) - hidden or visible depending on responsive state */}
+      <div className={`h-full shrink-0 md:block ${selectedChatId ? 'hidden md:w-80' : 'w-full'}`}>
+        <Sidebar
+          currentUserProfile={userProfile}
+          onlineUsers={onlineUsers}
+          activeChats={chats}
+          selectedChatId={selectedChatId}
+          onSelectUser={handleSelectUser}
+          onSelectChat={handleSelectChat}
+          onTransferChat={handleTransferChat}
+          onLogout={handleLogout}
+        />
+      </div>
+
+      {/* Main chat center pane */}
+      <div className={`h-full flex-1 flex flex-col bg-[#F7F9FB] ${selectedChatId ? 'w-full' : 'hidden md:flex'}`}>
+        {activeChat ? (
+          <div key={selectedChatId} className="h-full flex flex-col flex-1 relative">
+            {/* Mobile navigation row: Allows user to click back to roster list */}
+            <div className="md:hidden bg-white p-3 border-b border-slate-200 flex items-center gap-1.5 px-3.5 z-10 shrink-0">
+              <button
+                onClick={() => setSelectedChatId(null)}
+                className="p-2 text-blue-600 hover:bg-slate-50 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <ChevronLeft className="w-5 h-5 shrink-0" />
+                <span className="text-xs font-bold uppercase tracking-wider">Volver activos</span>
+              </button>
+            </div>
+
+            <ChatWindow
+              currentUserProfile={userProfile}
+              activeChat={activeChat}
+              messages={visibleMessages}
+              inputText={inputText}
+              onInputChange={setInputText}
+              onSendMessage={handleSendMessage}
+              onDeleteChat={handleDeleteChat}
+              onCollapse={() => setSelectedChatId(null)}
+              onCloseChat={handleCloseChat}
+              onRateDriver={handleRateDriver}
+              partnerProfile={partnerProfile}
+            />
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#F7F9FB] select-none">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.4 }}
+              className="max-w-md bg-white border border-slate-200 p-8 rounded-3xl shadow-xl"
+            >
+              <div className="inline-flex p-4 bg-yellow-405/15 border border-yellow-205 text-yellow-600 rounded-full mb-4 shadow-md shadow-yellow-100">
+                <span className="text-4xl">🛵</span>
+              </div>
+              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">Moto Chat - Red de Mototaxis</h2>
+              
+              {userProfile?.role === 'cliente' ? (
+                <>
+                  <p className="text-xs text-slate-500 mt-2.5 leading-relaxed font-medium">
+                    ¡Hola! Comienza seleccionando uno de los **Mototaxistas Conectados** en la lista lateral para iniciar un chat directo y solicitar tu servicio de transporte.
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed">
+                    💡 **Escritura Rápida:** Una vez que abras el chat, usa los botones directos para enviar tu ubicación rápida o consultar tarifas al instante.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-slate-505 mt-2.5 leading-relaxed font-sans font-medium">
+                    Bienvenido Conductor. Mantén la aplicación abierta para aparecer **en línea** ante los clientes disponibles en la plataforma.
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed">
+                    💡 **Traspaso de Servicios:** Si recibes un servicio y no puedes atenderlo por distancia o tiempo, búscalo en la lista lateral de compañeros en línea y presiona el botón naranja para **Traspasarlo** en tiempo real.
+                  </p>
+                </>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

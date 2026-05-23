@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "The profile of a system user, either a client or a mototaxista.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique user authentication ID." },
+        "email": { "type": "string", "format": "email", "description": "The user's registered email address." },
+        "name": { "type": "string", "description": "The user's customizable display name. Optional, falls back to email if empty." },
+        "role": { "type": "string", "enum": ["cliente", "moto"], "description": "The user's role in the system." },
+        "isOnline": { "type": "boolean", "description": "Whether the user is currently online." },
+        "lastActive": { "type": "integer", "description": "The last active time of the user as a epoch millisecond timestamp." },
+        "ratingCount": { "type": "integer", "description": "Number of received ratings." },
+        "ratingSum": { "type": "integer", "description": "Sum of all received rating stars." },
+        "averageRating": { "type": "number", "description": "The calculated average rating (sum / count)." }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "chat": {
+      "title": "Chat Session",
+      "description": "An active chat session between a client and a mototaxista representing a taxi request.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique chat identifier, typically clientId_driverId." },
+        "clientId": { "type": "string", "description": "The ID of the client user." },
+        "clientName": { "type": "string", "description": "The client display name (or email if name is empty)." },
+        "clientEmail": { "type": "string", "description": "The client email address." },
+        "driverId": { "type": "string", "description": "The ID of the active mototaxista driver user." },
+        "driverName": { "type": "string", "description": "The driver display name (or email)." },
+        "driverEmail": { "type": "string", "description": "The driver email address." },
+        "status": { "type": "string", "enum": ["open", "closed", "transferred"], "description": "The current state of the request." },
+        "lastMessage": { "type": "string", "description": "The content of the most recent message in the chat." },
+        "lastMessageTime": { "type": "integer", "description": "The timestamp of the most recent message." },
+        "isRated": { "type": "boolean", "description": "Whether the chat has been rated by the client." },
+        "clientDeleted": { "type": "boolean", "description": "Whether the client deleted this chat." },
+        "driverDeleted": { "type": "boolean", "description": "Whether the driver deleted this chat." }
+      },
+      "required": ["id", "clientId", "clientName", "clientEmail", "driverId", "driverName", "driverEmail", "status"]
+    },
+    "message": {
+      "title": "Chat Message",
+      "description": "An individual message sent within a chat session.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique message ID." },
+        "chatId": { "type": "string", "description": "The associated chat session ID." },
+        "text": { "type": "string", "description": "The text content of the message." },
+        "senderId": { "type": "string", "description": "The sender user ID." },
+        "senderName": { "type": "string", "description": "The sender's display name." },
+        "timestamp": { "type": "integer", "description": "The timestamp when the message was sent." },
+        "type": { "type": "string", "enum": ["text", "system"], "description": "The message type (standard or system alerts)." }
+      },
+      "required": ["id", "chatId", "text", "senderId", "senderName", "timestamp", "type"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "user",
+      "description": "User profiles database partitioned by Firebase Auth uid."
+    },
+    "chats/{chatId}": {
+      "schema": "chat",
+      "description": "Chat sessions collection."
+    },
+    "chats/{chatId}/messages/{messageId}": {
+      "schema": "message",
+      "description": "Messages subcollection nested under the specific chat session."
+    }
+  }
+}

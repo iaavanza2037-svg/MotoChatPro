@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Catch-all Deny Safetynet
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function getParentChat(chatId) {
+      return get(/databases/$(database)/documents/chats/$(chatId)).data;
+    }
+
+    // --- USERS COLLECTION ---
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() 
+                    && userId == request.auth.uid 
+                    && request.resource.data.uid == request.auth.uid
+                    && isValidUser(request.resource.data);
+      allow update: if isSignedIn() 
+                    && (
+                      // Scenario A: User is updating their own profile
+                      (
+                        userId == request.auth.uid 
+                        && request.resource.data.uid == request.auth.uid
+                        && isValidUser(request.resource.data)
+                      )
+                      ||
+                      // Scenario B: User rating the driver
+                      (
+                        resource.data.role == 'moto'
+                        && isValidUser(request.resource.data)
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingSum', 'ratingCount', 'averageRating'])
+                      )
+                    );
+      allow delete: if false;
+    }
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 320
+        && data.role in ['cliente', 'moto']
+        && (data.name is string && data.name.size() <= 120)
+        && data.isOnline is bool
+        && (data.lastActive is int || data.lastActive is float)
+        && (!('ratingCount' in data) || data.ratingCount is int)
+        && (!('ratingSum' in data) || data.ratingSum is int)
+        && (!('averageRating' in data) || data.averageRating is int || data.averageRating is float);
+    }
+
+    // --- CHATS COLLECTION ---
+    match /chats/{chatId} {
+      allow read: if isSignedIn() 
+                  && (resource.data.clientId == request.auth.uid || resource.data.driverId == request.auth.uid);
+      
+      allow create: if isSignedIn()
+                    && isValidId(chatId)
+                    && (request.resource.data.clientId == request.auth.uid || request.resource.data.driverId == request.auth.uid)
+                    && isValidChat(request.resource.data);
+                    
+      allow update: if isSignedIn()
+                    && isValidId(chatId)
+                    && (resource.data.clientId == request.auth.uid || resource.data.driverId == request.auth.uid)
+                    && isValidChat(request.resource.data)
+                    && request.resource.data.clientId == resource.data.clientId; // clientId is immutable
+      
+      allow delete: if isSignedIn() 
+                    && (resource.data.clientId == request.auth.uid || resource.data.driverId == request.auth.uid);
+    }
+
+    function isValidChat(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.clientId is string && data.clientId.size() <= 128
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.clientEmail is string && data.clientEmail.size() <= 320
+        && data.driverId is string && data.driverId.size() <= 128
+        && data.driverName is string && data.driverName.size() <= 120
+        && data.driverEmail is string && data.driverEmail.size() <= 320
+        && data.status in ['open', 'closed', 'transferred']
+        && data.lastMessage is string && data.lastMessage.size() <= 2000
+        && (data.lastMessageTime is int || data.lastMessageTime is float)
+        && (!('isRated' in data) || data.isRated is bool)
+        && (!('clientDeleted' in data) || data.clientDeleted is bool)
+        && (!('driverDeleted' in data) || data.driverDeleted is bool);
+    }
+
+    // --- MESSAGES SUBCOLLECTION ---
+    match /chats/{chatId}/messages/{messageId} {
+      allow read, list: if isSignedIn()
+                   && (getParentChat(chatId).clientId == request.auth.uid || getParentChat(chatId).driverId == request.auth.uid);
+      
+      allow create: if isSignedIn()
+                    && isValidId(messageId)
+                    && request.resource.data.senderId == request.auth.uid
+                    && (getParentChat(chatId).clientId == request.auth.uid || getParentChat(chatId).driverId == request.auth.uid)
+                    && isValidMessage(request.resource.data);
+                    
+      allow update: if false;
+      allow delete: if isSignedIn()
+                    && (getParentChat(chatId).clientId == request.auth.uid || getParentChat(chatId).driverId == request.auth.uid);
+    }
+
+    function isValidMessage(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.chatId is string && data.chatId.size() <= 128
+        && data.text is string && data.text.size() <= 2000
+        && data.senderId == request.auth.uid
+        && data.senderName is string && data.senderName.size() <= 120
+        && (data.timestamp is int || data.timestamp is float)
+        && data.type in ['text', 'system'];
+    }
+  }
+}

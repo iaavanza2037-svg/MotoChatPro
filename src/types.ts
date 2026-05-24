@@ -17,6 +17,10 @@ export interface UserProfile {
   latitude?: number;
   longitude?: number;
   hasGPS?: boolean;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  mototaxiNumber?: string;
 }
 
 export interface ChatSession {

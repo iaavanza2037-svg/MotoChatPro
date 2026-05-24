@@ -26,6 +26,8 @@ import { getHaversineDistance, getNearestPresetZone } from './utils/location';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
+import PermissionsOverlay from './components/PermissionsOverlay';
+import { useGpsTracker } from './hooks/useGpsTracker';
 import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2 } from 'lucide-react';
 
 // Helper to play synthesized alarm sound for 1.5 seconds (Ding-Ding! Ding-Ding!)
@@ -88,6 +90,67 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [redirectResultChecked, setRedirectResultChecked] = useState(false);
+  const [bypassOverlay, setBypassOverlay] = useState(false);
+
+  // Integrated Robust GPS tracker module (Requirements 1, 2, 7, 8, 13, 17, 18)
+  const {
+    gpsStatus,
+    trackingState: gpsTrackingState,
+    coords: gpsCoords,
+    isSensorOff: gpsIsSensorOff,
+    logs: gpsLogs,
+    envInfo: gpsEnvInfo,
+    startTracking: handleRetryGps,
+    stopTracking: handleStopGps,
+    isStarted: gpsIsStarted
+  } = useGpsTracker({
+    userId: currentUser?.uid,
+    onLocationUpdate: async (lat, lon, accuracy) => {
+      if (!currentUser || !userProfile) return;
+      // Only write update if coords changed or hasGPS wasn't set to prevent infinite loop
+      if (
+        !userProfile.hasGPS ||
+        userProfile.latitude !== lat ||
+        userProfile.longitude !== lon
+      ) {
+        try {
+          // Identify nearest community to automatically map text-based zones
+          const nearestZone = getNearestPresetZone(lat, lon);
+          
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          await updateDoc(userDocRef, {
+            latitude: lat,
+            longitude: lon,
+            hasGPS: true,
+            zone: nearestZone,
+            lastActive: Date.now()
+          });
+          console.log(`[GPS API Callback] Ubicación actualizada: ${lat}, ${lon} (${nearestZone})`);
+        } catch (err) {
+          console.warn("[GPS API Callback] Error actualizando firestore con coordenadas:", err);
+        }
+      }
+    }
+  });
+
+  // React to GPS loss, disablement, or revoking by turning off hasGPS flag in Firestore
+  useEffect(() => {
+    if (!currentUser || !userProfile) return;
+    const isLocalGpsUnavailable = 
+      gpsStatus !== 'granted' || 
+      gpsTrackingState === 'error' || 
+      gpsTrackingState === 'timeout' || 
+      gpsTrackingState === 'inactive';
+      
+    if (isLocalGpsUnavailable && userProfile.hasGPS) {
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      updateDoc(userDocRef, {
+        hasGPS: false
+      }).catch(err => {
+        console.warn("[GPS Loss Cleanup] Error actualizando hasGPS en Firestore:", err);
+      });
+    }
+  }, [gpsStatus, gpsTrackingState, currentUser, userProfile]);
 
   // Sound notification tracking refs
   const lastSessionMessageTimeRef = useRef<{ [chatId: string]: number }>({});
@@ -399,60 +462,7 @@ export default function App() {
     return () => unsubUsers();
   }, [currentUser, userProfile]);
 
-  // Automatic Real-Time Location Tracking (GPS Geolocation Watch)
-  useEffect(() => {
-    if (!currentUser || !userProfile) return;
-
-    if (!("geolocation" in navigator)) {
-      console.warn("Geolocation API is not supported by this browser.");
-      return;
-    }
-
-    const successCallback = async (position: GeolocationPosition) => {
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-
-      // Only write update if coords changed or hasGPS wasn't set to prevent infinite loop
-      if (
-        !userProfile.hasGPS ||
-        userProfile.latitude !== lat ||
-        userProfile.longitude !== lon
-      ) {
-        try {
-          // Identify nearest community to automatically map text-based zones
-          const nearestZone = getNearestPresetZone(lat, lon);
-          
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          await updateDoc(userDocRef, {
-            latitude: lat,
-            longitude: lon,
-            hasGPS: true,
-            zone: nearestZone,
-            lastActive: Date.now()
-          });
-          console.log(`[GPS] Ubicación actualizada: ${lat}, ${lon} (${nearestZone})`);
-        } catch (err) {
-          console.warn("[GPS] Error actualizando firestore con coordenadas:", err);
-        }
-      }
-    };
-
-    const errorCallback = (error: GeolocationPositionError) => {
-      console.warn("[GPS] Error de geolocalización o permiso denegado:", error.message);
-    };
-
-    const options = {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 30000
-    };
-
-    const watchId = navigator.geolocation.watchPosition(successCallback, errorCallback, options);
-
-    return () => {
-      navigator.geolocation.clearWatch(watchId);
-    };
-  }, [currentUser, userProfile?.uid]); // Bind to stable uid primitive to avoid infinite updates!
+  // Geolocation tracking is now managed fully inside the useGpsTracker hook.
 
   // Listen to Chat Sessions according to user role
   useEffect(() => {
@@ -486,8 +496,8 @@ export default function App() {
         // Remember the latest timestamp
         lastSessionMessageTimeRef.current[chat.id] = chat.lastMessageTime;
 
-        // Sound trigger conditions: only for active moto users, after initial load, for newer messages
-        if (isNewMessage && !isFirstLoadRef.current && userProfile.role === 'moto') {
+        // Sound trigger conditions: for active users (both client and mototaxista), after initial load, for newer messages
+        if (isNewMessage && !isFirstLoadRef.current && (userProfile.role === 'moto' || userProfile.role === 'cliente')) {
           // Check if we sent this message in the last 2 seconds (e.g. bypass echo sound or ourselves sending)
           const sentRecently = lastSentByMeTimeRef.current[chat.id] && (Date.now() - lastSentByMeTimeRef.current[chat.id] < 2000);
           const isDefaultStart = chat.lastMessage === 'Servicio iniciado. Esperando mensajes...';
@@ -850,6 +860,7 @@ export default function App() {
   // Action: Sign user out and set current user off-status
   const handleLogout = async () => {
     setSelectedChatId(null);
+    setBypassOverlay(false);
     if (currentUser && userProfile) {
       try {
         const userDocRef = doc(db, 'users', currentUser.uid);
@@ -957,6 +968,19 @@ export default function App() {
 
   return (
     <div className="h-screen flex bg-[#F7F9FB] text-slate-850 overflow-hidden font-sans relative">
+      {/* Onboarding and Permission setup overlay */}
+      {currentUser && userProfile && (gpsStatus !== 'granted' || gpsIsSensorOff) && !bypassOverlay && (
+        <PermissionsOverlay
+          gpsStatus={gpsStatus}
+          gpsTrackingState={gpsTrackingState}
+          gpsEnvInfo={gpsEnvInfo}
+          gpsLogs={gpsLogs}
+          isSensorOff={gpsIsSensorOff}
+          onGrantGps={handleRetryGps}
+          onBypass={() => setBypassOverlay(true)}
+        />
+      )}
+
       {/* Background Watermark/Map */}
       <div 
         className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] bg-center bg-no-repeat"
@@ -985,6 +1009,15 @@ export default function App() {
           onTransferChat={handleTransferChat}
           onLogout={handleLogout}
           onUpdateZone={handleUpdateZone}
+          gpsStatus={gpsStatus}
+          onRetryGps={handleRetryGps}
+          gpsTrackingState={gpsTrackingState}
+          gpsCoords={gpsCoords}
+          gpsLogs={gpsLogs}
+          gpsEnvInfo={gpsEnvInfo}
+          onStopGps={handleStopGps}
+          gpsIsStarted={gpsIsStarted}
+          isSensorOff={gpsIsSensorOff}
         />
       </div>
 

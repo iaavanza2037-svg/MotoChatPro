@@ -6,6 +6,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { ChatSession, ChatMessage, UserProfile } from '../types';
 import { Send, MapPin, DollarSign, Clock, AlertTriangle, ShieldCheck, CheckCircle2, Navigation, MessageSquare, Plus, RefreshCw, Car, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+import { getHaversineDistance, ZONAS_COORDINATES } from '../utils/location';
 
 interface ChatWindowProps {
   currentUserProfile: UserProfile;
@@ -173,6 +174,64 @@ export default function ChatWindow({
   const partnerName = isDriver ? activeChat.clientName : activeChat.driverName;
   const partnerRole = isDriver ? 'CLIENTE' : 'MOTOTAXISTA';
 
+  // Calculate distance info
+  const getExtendedDistanceInfo = () => {
+    if (!partnerProfile) return null;
+    
+    if (
+      currentUserProfile.latitude !== undefined &&
+      currentUserProfile.longitude !== undefined &&
+      partnerProfile.latitude !== undefined &&
+      partnerProfile.longitude !== undefined
+    ) {
+      const distance = getHaversineDistance(
+        currentUserProfile.latitude,
+        currentUserProfile.longitude,
+        partnerProfile.latitude,
+        partnerProfile.longitude
+      );
+      return {
+        distance,
+        display: `${distance.toFixed(1)} km`,
+        isGps: true
+      };
+    }
+
+    const getZoneCoords = (zoneName?: string) => {
+      if (!zoneName) return ZONAS_COORDINATES["Langue (Centro)"];
+      return ZONAS_COORDINATES[zoneName] || ZONAS_COORDINATES["Langue (Centro)"];
+    };
+
+    const myCoords = getZoneCoords(currentUserProfile.zone);
+    const partnerCoords = getZoneCoords(partnerProfile.zone);
+
+    if (myCoords && partnerCoords) {
+      const distance = getHaversineDistance(
+        myCoords.lat,
+        myCoords.lon,
+        partnerCoords.lat,
+        partnerCoords.lon
+      );
+      
+      if (distance === 0) {
+        return {
+          distance: 0.5,
+          display: "Misma zona (< 1 km)",
+          isGps: false
+        };
+      }
+      return {
+        distance,
+        display: `~${distance.toFixed(1)} km (Zona)`,
+        isGps: false
+      };
+    }
+
+    return null;
+  };
+
+  const distanceInfo = getExtendedDistanceInfo();
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[#F7F9FB] border-l border-slate-200" id="chat-window">
       {/* Upper Chat Header */}
@@ -190,9 +249,21 @@ export default function ChatWindow({
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
             </div>
-            <p className={`text-[9px] font-mono tracking-wider font-extrabold uppercase mt-1 ${activeChat.status === 'closed' ? 'text-red-500 animate-pulse' : 'text-green-500'}`}>
-              {partnerRole} • {activeChat.status === 'closed' ? 'SERVICIO FINALIZADO' : 'SERVICIO ACTIVO'}
-            </p>
+            <div className="flex items-center gap-2 mt-[3px] flex-wrap">
+              <span className={`text-[9px] font-mono tracking-wider font-extrabold uppercase ${activeChat.status === 'closed' ? 'text-red-500 animate-pulse' : 'text-green-550 border-0'}`}>
+                {partnerRole} • {activeChat.status === 'closed' ? 'SERVICIO FINALIZADO' : 'SERVICIO ACTIVO'}
+              </span>
+              {distanceInfo && (
+                <span className="text-[9px] font-extrabold text-slate-500 flex items-center gap-0.5 bg-slate-100 hover:bg-slate-200/80 px-1.5 py-[1px] rounded transition-colors select-none" title="Distancia aproximada entre ustedes">
+                  📍 a {distanceInfo.display}
+                  {distanceInfo.distance <= 5 && (
+                    <span className="text-[7.5px] bg-emerald-100 text-emerald-800 font-extrabold px-1 rounded animate-pulse">
+                      Cercano
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

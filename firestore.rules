@@ -55,7 +55,11 @@ service cloud.firestore {
         && (data.lastActive is int || data.lastActive is float)
         && (!('ratingCount' in data) || data.ratingCount is int)
         && (!('ratingSum' in data) || data.ratingSum is int)
-        && (!('averageRating' in data) || data.averageRating is int || data.averageRating is float);
+        && (!('averageRating' in data) || data.averageRating is int || data.averageRating is float)
+        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 100))
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 100))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && (!('mototaxiNumber' in data) || (data.mototaxiNumber is string && data.mototaxiNumber.size() <= 50));
     }
 
     // --- CHATS COLLECTION ---

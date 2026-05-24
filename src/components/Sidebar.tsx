@@ -5,9 +5,10 @@
 
 import React, { useState } from 'react';
 import { UserProfile, ChatSession } from '../types';
-import { LogOut, User, Users, Shield, Compass, ChevronRight, MessageSquare, RefreshCw, Radio } from 'lucide-react';
-import { motion } from 'motion/react';
-import { getHaversineDistance } from '../utils/location';
+import { LogOut, User, Users, Shield, Compass, ChevronRight, MessageSquare, RefreshCw, Radio, Terminal, Settings, Zap, AlertTriangle } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { getHaversineDistance, ZONAS_COORDINATES } from '../utils/location';
+import { GpsCoordinates, GpsEnvInfo, GpsStatus, TrackingState } from '../hooks/useGpsTracker';
 
 const ZONAS_PRESETS = [
   "Langue (Centro)",
@@ -33,6 +34,15 @@ interface SidebarProps {
   onTransferChat: (targetDriver: UserProfile) => void;
   onLogout: () => void;
   onUpdateZone: (newZone: string) => Promise<void>;
+  gpsStatus?: GpsStatus;
+  onRetryGps?: () => void;
+  gpsTrackingState?: TrackingState;
+  gpsCoords?: GpsCoordinates | null;
+  gpsLogs?: string[];
+  gpsEnvInfo?: GpsEnvInfo;
+  onStopGps?: () => void;
+  gpsIsStarted?: boolean;
+  isSensorOff?: boolean;
 }
 
 export default function Sidebar({
@@ -44,17 +54,26 @@ export default function Sidebar({
   onSelectChat,
   onTransferChat,
   onLogout,
-  onUpdateZone
+  onUpdateZone,
+  gpsStatus = 'prompt',
+  onRetryGps,
+  gpsTrackingState = 'inactive',
+  gpsCoords = null,
+  gpsLogs = [],
+  gpsEnvInfo = { isStandalone: false, isWebView: false, isSocialMedia: false, mobileBrand: 'Generico/Otros' },
+  onStopGps,
+  gpsIsStarted = false,
+  isSensorOff = false
 }: SidebarProps) {
   const isDriver = currentUserProfile.role === 'moto';
   const [isEditingZone, setIsEditingZone] = useState(false);
   const [selectedZone, setSelectedZone] = useState(currentUserProfile.zone || 'Langue (Centro)');
   const [customZone, setCustomZone] = useState('');
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  const getDistanceDisplay = (otherUser: UserProfile) => {
+  const getExtendedDistanceInfo = (otherUser: UserProfile) => {
+    // 1. Try real GPS position (if both users have GPS coords)
     if (
-      currentUserProfile.hasGPS &&
-      otherUser.hasGPS &&
       currentUserProfile.latitude !== undefined &&
       currentUserProfile.longitude !== undefined &&
       otherUser.latitude !== undefined &&
@@ -66,8 +85,44 @@ export default function Sidebar({
         otherUser.latitude,
         otherUser.longitude
       );
-      return `${distance.toFixed(1)} km`;
+      return {
+        distance,
+        display: `${distance.toFixed(1)} km`,
+        isGps: true
+      };
     }
+
+    // 2. Fallback: Zone centroids (approximate distance)
+    const getZoneCoords = (zoneName?: string) => {
+      if (!zoneName) return ZONAS_COORDINATES["Langue (Centro)"];
+      return ZONAS_COORDINATES[zoneName] || ZONAS_COORDINATES["Langue (Centro)"];
+    };
+
+    const myCoords = getZoneCoords(currentUserProfile.zone);
+    const otherCoords = getZoneCoords(otherUser.zone);
+
+    if (myCoords && otherCoords) {
+      const distance = getHaversineDistance(
+        myCoords.lat,
+        myCoords.lon,
+        otherCoords.lat,
+        otherCoords.lon
+      );
+      
+      if (distance === 0) {
+        return {
+          distance: 0.5,
+          display: "Misma zona (< 1 km)",
+          isGps: false
+        };
+      }
+      return {
+        distance,
+        display: `~${distance.toFixed(1)} km (Zona)`,
+        isGps: false
+      };
+    }
+
     return null;
   };
 
@@ -102,10 +157,21 @@ export default function Sidebar({
     );
   };
 
-  // Filter other online drivers
-  const onlineDrivers = onlineUsers.filter(u => u.uid !== currentUserProfile.uid && u.role === 'moto');
-  // Filter other online clients (incase driver wants to browse, but mostly for listing, standard users)
-  const onlineClients = onlineUsers.filter(u => u.uid !== currentUserProfile.uid && u.role === 'cliente');
+  // Filter other online drivers and sort by proximity (closest first)
+  const rawDrivers = onlineUsers.filter(u => u.uid !== currentUserProfile.uid && u.role === 'moto');
+  const onlineDrivers = [...rawDrivers].sort((a, b) => {
+    const distA = getExtendedDistanceInfo(a)?.distance ?? 9999;
+    const distB = getExtendedDistanceInfo(b)?.distance ?? 9999;
+    return distA - distB;
+  });
+
+  // Filter other online clients (in case driver wants to browse) and sort by proximity too
+  const rawClients = onlineUsers.filter(u => u.uid !== currentUserProfile.uid && u.role === 'cliente');
+  const onlineClients = [...rawClients].sort((a, b) => {
+    const distA = getExtendedDistanceInfo(a)?.distance ?? 9999;
+    const distB = getExtendedDistanceInfo(b)?.distance ?? 9999;
+    return distA - distB;
+  });
 
   return (
     <aside className="w-full md:w-80 bg-white border-r border-slate-200 flex flex-col h-full shrink-0 shadow-sm" id="sidebar">
@@ -204,20 +270,291 @@ export default function Sidebar({
             )}
           </div>
         ) : (
-          <div className="flex flex-col gap-0.5 mt-0.5">
-            <span className="text-xs font-bold text-yellow-400 tracking-wide truncate flex items-center gap-1">
-              {currentUserProfile.zone || 'Langue (Centro)'}
-            </span>
-            {currentUserProfile.hasGPS ? (
-              <span className="text-[9px] text-emerald-400 font-medium flex items-center gap-1 font-mono">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                CONEXIÓN GPS ACTIVA (Filtro auto a 15km)
+          <div className="flex flex-col gap-2 mt-0.5">
+            {/* Location & Diagnostic Trigger */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-yellow-400 tracking-wide truncate flex items-center gap-1">
+                {currentUserProfile.zone || 'Langue (Centro)'}
               </span>
-            ) : (
-              <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 font-mono">
-                ⚠️ GPS INACTIVO (Modo manual activo)
-              </span>
+              
+              <button
+                type="button"
+                onClick={() => setShowDiagnostics(prev => !prev)}
+                className={`p-1 rounded-md text-[10px] uppercase font-bold px-1.5 flex items-center gap-1 cursor-pointer transition-all ${
+                  showDiagnostics 
+                    ? 'bg-yellow-400 text-slate-950 font-extrabold scale-105' 
+                    : 'bg-slate-800 text-slate-400 border border-slate-700/50 hover:bg-slate-700 hover:text-white'
+                }`}
+                title="Ver diagnósticos del GPS de tu celular"
+              >
+                <Terminal className="w-3 h-3" />
+                <span>Diag</span>
+              </button>
+            </div>
+
+            {/* In-App Social Media Browser / OS Detection warning - REQUIREMENT 11 & 12 */}
+            {(gpsEnvInfo.isSocialMedia || gpsEnvInfo.isWebView) && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex flex-col gap-1.5 text-[9px] text-slate-300">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 animate-bounce" />
+                  <span>Navegador de Redes Sociales Detectado</span>
+                </div>
+                <p className="leading-tight text-slate-400">
+                  Estás viendo la app dentro de <strong className="text-white">WhatsApp, Facebook o Instagram</strong>. Estos navegadores bloquean el GPS para seguridad.
+                </p>
+                <div className="bg-slate-950/60 p-2 rounded border border-slate-800 text-[8.5px] space-y-1">
+                  <p className="font-bold text-yellow-400">¿Cómo habilitarlo?</p>
+                  <p className="text-slate-300">
+                    Sigue estos pasos para solucionarlo:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
+                    <li>Toca los <strong className="text-white">3 puntos •••</strong> arriba a la derecha.</li>
+                    <li>Selecciona <strong className="text-white">"Abrir en el navegador"</strong> o <strong className="text-white">"Abrir en Chrome" / "Abrir en Safari"</strong>.</li>
+                  </ol>
+                </div>
+              </div>
             )}
+
+            {/* GPS Interactive status indicators & guidance */}
+            {isSensorOff ? (
+              <div className="bg-amber-500/10 border border-amber-500/15 rounded-lg p-2.5 flex flex-col gap-2 text-[9px] text-slate-300">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-550 bg-amber-500 animate-ping" />
+                  <span>GPS del Celular Apagado</span>
+                </div>
+                
+                <p className="leading-relaxed text-slate-300 font-medium">
+                  El sensor físico de tu teléfono está inactivo. Enciéndelo para conectarte de nuevo.
+                </p>
+
+                <div className="bg-slate-950/40 p-2 rounded border border-slate-800 text-[8px] text-slate-400 leading-normal space-y-1">
+                  <p className="font-bold text-amber-500 font-extrabold">¿Cómo solucionarlo?</p>
+                  <ol className="list-decimal list-inside space-y-0.5">
+                    <li>Desliza la barra superior de tu dispositivo.</li>
+                    <li>Busca y presiona el ícono de <strong className="text-white">Ubicación / GPS</strong>.</li>
+                    <li className="text-emerald-400 font-bold">⚡ Se conectará solo en segundos al encenderlo.</li>
+                  </ol>
+                </div>
+              </div>
+            ) : gpsStatus === 'denied' || gpsTrackingState === 'error' ? (
+              <div className="bg-red-500/10 border border-red-500/15 rounded-lg p-2.5 flex flex-col gap-2 text-[9px] text-slate-300">
+                <div className="flex items-center gap-1.5 text-red-400 font-bold">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                  <span>Ubicación GPS Bloqueada</span>
+                </div>
+                
+                <p className="leading-relaxed text-slate-300 font-medium">
+                  Has denegado el permiso de ubicación o la configuración de tu celular restringe el GPS.
+                </p>
+
+                <div className="bg-slate-950/40 p-2.5 rounded border border-slate-800 text-[8px] text-slate-400 leading-normal space-y-2">
+                  <p className="font-bold text-yellow-500 text-[9px] uppercase tracking-wider">¿Cómo solucionarlo?</p>
+                  
+                  <div>
+                    <p className="font-extrabold text-amber-400">Opción A: Si estás en Navegadores Web (Chrome, Safari, etc.)</p>
+                    <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
+                      <li>Toca el candado o engrane <strong className="text-white">🔒</strong> junto a la barra de dirección arriba.</li>
+                      <li>Cambia "Ubicación" de Bloqueado a <strong className="text-white">"Permitir"</strong>.</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-extrabold text-sky-400">Opción B: Si estás dentro de la App / PWA o Redes Sociales</p>
+                    <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
+                      <li>Ve a los Ajustes generales de tu celular ➔ <strong className="text-white">Aplicaciones</strong>.</li>
+                      <li>Busca y selecciona la app <strong className="text-white">Moto Chat</strong> (o tu navegador web si entraste por un link de WhatsApp).</li>
+                      <li>Entra a <strong className="text-white">Permisos</strong> ➔ <strong className="text-white">Ubicación</strong> y actívala (selecciona "Permitir siempre" o "Permitir con la app en uso").</li>
+                    </ol>
+                  </div>
+
+                  <div className="border-t border-slate-800/80 pt-1 text-emerald-400 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    <span>Se reconectará automáticamente de inmediato al activarlo.</span>
+                  </div>
+                </div>
+
+                {onRetryGps && (
+                  <button
+                    type="button"
+                    onClick={onRetryGps}
+                    className="mt-0.5 w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-1.5 px-1.5 flex items-center justify-center gap-1 cursor-pointer transition-all active:scale-95 text-[9px] tracking-wider uppercase font-mono shadow-sm"
+                  >
+                    <RefreshCw className="w-3 h-3 animate-spin duration-1000" />
+                    <span>Conceder/Reintentar GPS</span>
+                  </button>
+                )}
+              </div>
+            ) : gpsStatus === 'granted' && (gpsTrackingState === 'active' || gpsCoords !== null || currentUserProfile.hasGPS) ? (
+              <div className="flex flex-col gap-1 bg-slate-900/40 p-2 rounded-lg border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-1 font-mono">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    GPS ACTIVO ({gpsCoords ? `+/- ${gpsCoords.accuracy.toFixed(0)}m` : '15km'})
+                  </span>
+                  {gpsIsStarted && onStopGps && (
+                    <button
+                      type="button"
+                      onClick={onStopGps}
+                      className="text-[8px] uppercase tracking-wider text-red-400 hover:text-red-300 underline font-mono cursor-pointer"
+                    >
+                      Pausar
+                    </button>
+                  )}
+                </div>
+                {gpsCoords && (
+                  <div className="flex justify-between items-center text-[8px] text-slate-400 font-mono">
+                    <span>L: {gpsCoords.latitude.toFixed(5)}</span>
+                    <span>Lon: {gpsCoords.longitude.toFixed(5)}</span>
+                  </div>
+                )}
+              </div>
+            ) : gpsTrackingState === 'searching' || gpsStatus === 'prompt' ? (
+              <div className="flex flex-col gap-2 bg-slate-900/35 border border-slate-800/80 rounded-lg p-2.5">
+                <span className="text-[9px] text-amber-400 font-bold flex items-center gap-1 font-mono animate-pulse">
+                  <RefreshCw className="w-3 h-3 text-yellow-400 animate-spin" />
+                  Buscando señal GPS ({gpsEnvInfo.mobileBrand})...
+                </span>
+                <p className="text-[8px] text-slate-400 leading-normal">
+                  La geolocalización permite encontrarte automáticamente con personas en un radio de 15km.
+                </p>
+                {onRetryGps && (
+                  <button
+                    type="button"
+                    onClick={onRetryGps}
+                    className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700/60 font-bold rounded-lg py-1 px-2 flex items-center justify-center gap-1 cursor-pointer transition-all text-[9.5px]"
+                  >
+                    <Compass className="w-3 h-3 text-yellow-400" />
+                    <span className="text-[9px] text-slate-200">Activar/Actualizar GPS</span>
+                  </button>
+                )}
+              </div>
+            ) : gpsTrackingState === 'timeout' ? (
+              <div className="flex flex-col gap-2 bg-amber-500/10 border border-amber-500/15 rounded-lg p-2.5 text-[9px]">
+                <div className="flex items-center gap-1 text-amber-400 font-bold font-mono">
+                  <span>⏱️</span>
+                  <span>Tiempo Agotado Buscando GPS</span>
+                </div>
+                <p className="text-[8px] text-slate-350 leading-relaxed">
+                  El satélite tarda demasiado en responder. Asegúrate de estar bajo cielo descubierto o cerca de una ventana.
+                </p>
+                {onRetryGps && (
+                  <button
+                    type="button"
+                    onClick={onRetryGps}
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-1 px-1.5 flex items-center justify-center gap-1 cursor-pointer transition-colors font-mono"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Forzar Reintento</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              // General error or fallback
+              <div className="flex flex-col gap-2 bg-amber-500/15 border border-amber-500/20 rounded-lg p-2.5 text-[9px] text-slate-300">
+                <span className="text-amber-400 font-bold flex items-center gap-1 font-mono">
+                  ⚠️ Limitación de Señal Local
+                </span>
+                <p className="leading-relaxed text-slate-400">
+                  El GPS no ha devuelto información todavía. Puedes fijar tu ubicación de soporte manualmente arriba.
+                </p>
+                {onRetryGps && (
+                  <button
+                    type="button"
+                    onClick={onRetryGps}
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-1.5 px-1.5 flex items-center justify-center gap-1 cursor-pointer transition-colors font-mono"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Habilitar Señal GPS Celular</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Diagnostic collapsible Terminal panel - REQUIREMENT 16 */}
+            <AnimatePresence>
+              {showDiagnostics && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="overflow-hidden bg-slate-950 border border-slate-800 rounded-lg"
+                >
+                  <div className="p-2 border-b border-slate-800 bg-slate-900 flex justify-between items-center">
+                    <span className="text-[9px] font-bold text-yellow-500 uppercase font-mono flex items-center gap-1">
+                      <Terminal className="w-3 h-3 text-yellow-400" />
+                      Rastreador Satelital Interno
+                    </span>
+                    <span className="text-[8px] bg-slate-800 text-slate-300 px-1 py-0.5 rounded font-mono font-bold">
+                      {gpsEnvInfo.mobileBrand}
+                    </span>
+                  </div>
+
+                  <div className="p-2 text-[8px] font-mono leading-relaxed text-slate-300 space-y-1 bg-slate-950">
+                    <div className="grid grid-cols-2 gap-1.5 border-b border-slate-900 pb-1.5 text-[8.5px]">
+                      <div>
+                        <span className="text-slate-500">Modo: </span>
+                        <strong className="text-slate-200">
+                          {gpsEnvInfo.isStandalone ? 'PWA Standalone' : 'Navegador Web'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">OS/Modelo: </span>
+                        <strong className="text-slate-250 font-bold text-slate-200">Android</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Estado GPS: </span>
+                        <strong className={
+                          gpsTrackingState === 'active' ? 'text-emerald-400' :
+                          gpsTrackingState === 'searching' ? 'text-yellow-400' : 'text-red-400'
+                        }>
+                          {gpsTrackingState === 'active' ? 'Conectado' : 
+                           gpsTrackingState === 'searching' ? 'Buscando' : 'Inactivo'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Precisión actual: </span>
+                        <strong className="text-slate-100">
+                          {gpsCoords ? `${gpsCoords.accuracy.toFixed(1)} m` : '--'}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 pt-1">
+                      <p className="font-bold text-slate-400 text-[8.5px] uppercase border-b border-slate-900 pb-0.5">Logs en vivo de Android:</p>
+                      <div className="max-h-[90px] overflow-y-auto space-y-1 pr-1 scrollbar-thin scrollbar-thumb-slate-800">
+                        {gpsLogs.length === 0 ? (
+                          <p className="text-slate-600 italic">No hay logs satelitales guardados.</p>
+                        ) : (
+                          gpsLogs.map((logStr, idx) => (
+                            <p key={idx} className="text-slate-300 whitespace-nowrap overflow-x-auto">
+                              {logStr}
+                            </p>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Optimizations & specific brands quick hints */}
+                  <div className="px-2 py-1.5 bg-slate-900/60 text-[8px] text-slate-400 space-y-1">
+                    <p className="font-bold text-yellow-600 text-[8.5px]">⚙️ Ajustes recomendados para {gpsEnvInfo.mobileBrand}:</p>
+                    {gpsEnvInfo.mobileBrand === 'Xiaomi' && (
+                      <p className="leading-normal">Xiaomi &rarr; Mantén presionada la app &rarr; Información &rarr; Permisos &rarr; Ubicación en segundo plano &rarr; "Permitir siempre".</p>
+                    )}
+                    {gpsEnvInfo.mobileBrand === 'Huawei' && (
+                      <p className="leading-normal">Huawei &rarr; Ajustes &rarr; Aplicaciones &rarr; Permisos de Aplicación &rarr; Localización de alta fidelidad &rarr; "Activar".</p>
+                    )}
+                    {gpsEnvInfo.mobileBrand === 'Samsung' && (
+                      <p className="leading-normal">Samsung &rarr; Ajustes de Ubicación &rarr; Mejorar Precisión &rarr; Habilita "Búsqueda con Wi-Fi/Bluetooth".</p>
+                    )}
+                    {gpsEnvInfo.mobileBrand === 'Generico/Otros' && (
+                      <p className="leading-normal font-sans">Habilita "Ubicación de alta precisión de Google" para que use red móvil antenas y satélites simultáneamente.</p>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
       </div>
@@ -248,9 +585,11 @@ export default function Sidebar({
                 <p className="text-[10px] text-slate-400 mt-1">Saldrás en la lista de los clientes online.</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 font-sans text-slate-800">
                 {activeChats.map((chat) => {
                   const isActive = selectedChatId === chat.id;
+                  const clientUser = onlineUsers.find(u => u.uid === chat.clientId);
+                  const distanceInfo = clientUser ? getExtendedDistanceInfo(clientUser) : null;
                   return (
                     <div
                       key={chat.id}
@@ -262,18 +601,34 @@ export default function Sidebar({
                       }`}
                     >
                       <div className="flex justify-between items-start">
-                        <span className="font-bold text-xs block truncate max-w-[150px]">
+                        <span className="font-bold text-xs block truncate max-w-[120px]">
                           👤 {chat.clientName}
                         </span>
-                        <span className={`text-[8px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider font-mono ${
-                          isActive
-                            ? 'bg-slate-950/20 text-slate-950'
-                            : chat.status === 'transferred'
-                              ? 'bg-orange-100 text-orange-750 border border-orange-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                        }`}>
-                          {chat.status === 'transferred' ? 'Transf.' : 'Recibido'}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0 select-none">
+                          {distanceInfo && (
+                            <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded border ${
+                              isActive
+                                ? 'bg-slate-950/25 text-slate-950 border-slate-950/20'
+                                : 'bg-sky-50 text-sky-700 border-sky-100/80'
+                            }`} title={`Distancia calculada: ${distanceInfo.display}`}>
+                              📍 {distanceInfo.display}
+                              {distanceInfo.distance <= 5 && (
+                                <span className="ml-1 text-[7.5px] font-black uppercase text-amber-700 animate-pulse">
+                                  ⚡5km
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          <span className={`text-[8px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider font-mono ${
+                            isActive
+                              ? 'bg-slate-950/20 text-slate-950'
+                              : chat.status === 'transferred'
+                                ? 'bg-orange-100 text-orange-750 border border-orange-200'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                          }`}>
+                            {chat.status === 'transferred' ? 'Transf.' : 'Recibido'}
+                          </span>
+                        </div>
                       </div>
                       <p className={`text-[11px] mt-1.5 truncate ${isActive ? 'text-slate-900 font-medium' : 'text-slate-500'}`}>
                         {chat.lastMessage || 'Inicializando servicio...'}
@@ -304,6 +659,7 @@ export default function Sidebar({
                 {onlineDrivers.map((driver) => {
                   const associatedChat = activeChats.find(c => c.driverId === driver.uid);
                   const isSelected = selectedChatId === `${currentUserProfile.uid}_${driver.uid}` || (associatedChat && selectedChatId === associatedChat.id);
+                  const distInfo = getExtendedDistanceInfo(driver);
                   
                   return (
                     <div
@@ -318,19 +674,38 @@ export default function Sidebar({
                       <div className="min-w-0 pr-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                          <p className="font-bold text-xs truncate">{driver.name}</p>
+                          <p className="font-bold text-xs truncate animate-fade-in">{driver.name}</p>
                           {renderStars(driver.averageRating, driver.ratingCount, false)}
-                          {getDistanceDisplay(driver) && (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                          {distInfo && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 flex items-center gap-1 ${
                               isSelected ? 'bg-slate-900/20 text-slate-950 font-bold' : 'bg-sky-50 text-sky-700 border border-sky-100 font-bold'
-                            }`} title="Distancia calculada por GPS">
-                              📍 a {getDistanceDisplay(driver)}
+                            }`} title="Distancia aproximada">
+                              📍 a {distInfo.display}
+                              {distInfo.distance <= 5 && (
+                                <span className={`text-[8px] px-1 py-0.2 rounded font-extrabold shrink-0 tracking-wider shadow-sm uppercase ${
+                                  isSelected ? 'bg-slate-950 text-yellow-400 animate-pulse' : 'bg-emerald-105 text-emerald-800 border border-emerald-200 bg-emerald-100 animate-pulse'
+                                }`}>
+                                  Cercano
+                                </span>
+                              )}
                             </span>
                           )}
                         </div>
-                        <p className={`text-[10px] truncate mt-0.5 ${isSelected ? 'text-slate-900/60' : 'text-slate-500 font-mono'}`}>
-                          {driver.email}
-                        </p>
+                        <div className="flex flex-col gap-0.5 mt-1">
+                          <p className={`text-[9px] truncate font-semibold font-mono ${isSelected ? 'text-slate-905/70' : 'text-slate-500'}`}>
+                            {driver.email}
+                          </p>
+                          {driver.phone && (
+                            <p className={`text-[10px] font-bold flex items-center gap-1 ${isSelected ? 'text-slate-905' : 'text-slate-700'}`}>
+                              <span>📞</span> <span className="font-mono">{driver.phone}</span>
+                            </p>
+                          )}
+                          {driver.mototaxiNumber && (
+                            <p className="text-[9px] font-bold text-slate-600 bg-yellow-400/25 border border-yellow-405/20 rounded px-1.5 py-0.5 w-max">
+                              🛵 N° {driver.mototaxiNumber}
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <ChevronRight className={`w-4 h-4 shrink-0 transition-transform ${isSelected ? 'translate-x-1 text-white' : 'text-slate-400'}`} />
                     </div>
@@ -363,40 +738,60 @@ export default function Sidebar({
               </div>
             ) : (
               <div className="space-y-2">
-                {onlineDrivers.map((driver) => (
-                  <div
-                    key={driver.uid}
-                    className="p-3 bg-white border border-slate-200 rounded-xl text-slate-800 flex justify-between items-center hover:border-slate-300 transition-colors shadow-sm"
-                  >
-                    <div className="min-w-0 shrink pr-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                        <p className="font-bold text-xs truncate text-slate-800">{driver.name}</p>
-                        {renderStars(driver.averageRating, driver.ratingCount, false)}
-                        {getDistanceDisplay(driver) && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-100 shrink-0" title="Distancia calculada por GPS">
-                            📍 a {getDistanceDisplay(driver)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[9px] text-slate-500 truncate mt-0.5 font-mono">{driver.email}</p>
-                    </div>
-
-                    <button
-                      disabled={!selectedChatId || selectedChatId.includes(driver.uid)}
-                      onClick={() => onTransferChat(driver)}
-                      className={`text-[9px] font-bold px-3 py-1.5 rounded uppercase font-sans tracking-wide shrink-0 flex items-center gap-1 transition-colors cursor-pointer ${
-                        selectedChatId && !selectedChatId.includes(driver.uid)
-                          ? 'bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold active:scale-[0.98]'
-                          : 'bg-slate-100 text-slate-400 opacity-60 cursor-not-allowed border border-slate-200'
-                      }`}
-                      title={selectedChatId ? `Traspasar servicio activo a ${driver.name}` : "Abre un chat primero para poder transferirlo"}
+                {onlineDrivers.map((driver) => {
+                  const distInfo = getExtendedDistanceInfo(driver);
+                  return (
+                    <div
+                      key={driver.uid}
+                      className="p-3 bg-white border border-slate-200 rounded-xl text-slate-800 flex justify-between items-center hover:border-slate-300 transition-colors shadow-sm"
                     >
-                      <RefreshCw className="w-3 h-3 hover:rotate-180 transition-transform shrink-0" />
-                      <span>Transferir</span>
-                    </button>
-                  </div>
-                ))}
+                      <div className="min-w-0 shrink pr-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                          <p className="font-bold text-xs truncate text-slate-800">{driver.name}</p>
+                          {renderStars(driver.averageRating, driver.ratingCount, false)}
+                          {distInfo && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-100 shrink-0 flex items-center gap-1" title="Distancia aproximada entre colegas">
+                              📍 a {distInfo.display}
+                              {distInfo.distance <= 5 && (
+                                <span className="bg-emerald-100 text-emerald-800 border border-emerald-200/50 text-[8px] px-1.5 py-[1px] rounded uppercase font-black tracking-wide animate-pulse inline-block">
+                                  Cercano
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-0.5 mt-1">
+                          <p className="text-[9px] text-slate-500 truncate font-mono">{driver.email}</p>
+                          {driver.phone && (
+                            <p className="text-[10px] font-bold text-slate-700 flex items-center gap-1">
+                              <span>📞</span> <span className="font-mono">{driver.phone}</span>
+                            </p>
+                          )}
+                          {driver.mototaxiNumber && (
+                            <p className="text-[9px] font-bold text-slate-600 bg-yellow-400/25 border border-yellow-405/20 rounded px-1.5 py-0.5 w-[max-content]">
+                              <span>🛵</span> N° {driver.mototaxiNumber}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        disabled={!selectedChatId || selectedChatId.includes(driver.uid)}
+                        onClick={() => onTransferChat(driver)}
+                        className={`text-[9px] font-bold px-3 py-1.5 rounded uppercase font-sans tracking-wide shrink-0 flex items-center gap-1 transition-colors cursor-pointer ${
+                          selectedChatId && !selectedChatId.includes(driver.uid)
+                            ? 'bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold active:scale-[0.98]'
+                            : 'bg-slate-100 text-slate-400 opacity-60 cursor-not-allowed border border-slate-200'
+                        }`}
+                        title={selectedChatId ? `Traspasar servicio activo a ${driver.name}` : "Abre un chat primero para poder transferirlo"}
+                      >
+                        <RefreshCw className="w-3 h-3 hover:rotate-180 transition-transform shrink-0" />
+                        <span>Transferir</span>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

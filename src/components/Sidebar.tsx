@@ -34,6 +34,8 @@ interface SidebarProps {
   onTransferChat: (targetDriver: UserProfile) => void;
   onLogout: () => void;
   onUpdateZone: (newZone: string) => Promise<void>;
+  onToggleMap?: () => void;
+  isMapActive?: boolean;
   gpsStatus?: GpsStatus;
   onRetryGps?: () => void;
   gpsTrackingState?: TrackingState;
@@ -55,6 +57,8 @@ export default function Sidebar({
   onTransferChat,
   onLogout,
   onUpdateZone,
+  onToggleMap,
+  isMapActive = false,
   gpsStatus = 'prompt',
   onRetryGps,
   gpsTrackingState = 'inactive',
@@ -291,6 +295,22 @@ export default function Sidebar({
                 <span>Diag</span>
               </button>
             </div>
+
+            {/* Live Map Toggle Button */}
+            {onToggleMap && (
+              <button
+                type="button"
+                onClick={onToggleMap}
+                className={`w-full py-2 px-3 font-extrabold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  isMapActive
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold'
+                    : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-extrabold'
+                }`}
+              >
+                <span>{isMapActive ? '💬' : '🗺️'}</span>
+                <span>{isMapActive ? '💬 Ver Lista de Chats' : '🗺️ Ver Mapa MotoGo en Vivo'}</span>
+              </button>
+            )}
 
             {/* In-App Social Media Browser / OS Detection warning - REQUIREMENT 11 & 12 */}
             {(gpsEnvInfo.isSocialMedia || gpsEnvInfo.isWebView) && (

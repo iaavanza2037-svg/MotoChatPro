@@ -26,6 +26,7 @@ import { getHaversineDistance, getNearestPresetZone } from './utils/location';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
+import MapView from './components/MapView';
 import PermissionsOverlay from './components/PermissionsOverlay';
 import { useGpsTracker } from './hooks/useGpsTracker';
 import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2 } from 'lucide-react';
@@ -91,6 +92,7 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [redirectResultChecked, setRedirectResultChecked] = useState(false);
   const [bypassOverlay, setBypassOverlay] = useState(false);
+  const [isMapActive, setIsMapActive] = useState(false);
 
   // Integrated Robust GPS tracker module (Requirements 1, 2, 7, 8, 13, 17, 18)
   const {
@@ -998,17 +1000,25 @@ export default function App() {
       )}
 
       {/* Roster & Chats panel (Sidebar) - hidden or visible depending on responsive state */}
-      <div className={`h-full shrink-0 md:block ${selectedChatId ? 'hidden md:w-80' : 'w-full'}`}>
+      <div className={`h-full shrink-0 md:block ${selectedChatId || isMapActive ? 'hidden md:w-80' : 'w-full'}`}>
         <Sidebar
           currentUserProfile={userProfile}
           onlineUsers={onlineUsers}
           activeChats={chats}
           selectedChatId={selectedChatId}
-          onSelectUser={handleSelectUser}
-          onSelectChat={handleSelectChat}
+          onSelectUser={(u) => {
+            handleSelectUser(u);
+            setIsMapActive(false);
+          }}
+          onSelectChat={(c) => {
+            handleSelectChat(c);
+            setIsMapActive(false);
+          }}
           onTransferChat={handleTransferChat}
           onLogout={handleLogout}
           onUpdateZone={handleUpdateZone}
+          onToggleMap={() => setIsMapActive(prev => !prev)}
+          isMapActive={isMapActive}
           gpsStatus={gpsStatus}
           onRetryGps={handleRetryGps}
           gpsTrackingState={gpsTrackingState}
@@ -1021,9 +1031,30 @@ export default function App() {
         />
       </div>
 
-      {/* Main chat center pane */}
-      <div className={`h-full flex-1 flex flex-col bg-[#F7F9FB] ${selectedChatId ? 'w-full' : 'hidden md:flex'}`}>
-        {activeChat ? (
+      {/* Main center pane (Chat or Map) */}
+      <div className={`h-full flex-1 flex flex-col bg-[#F7F9FB] ${selectedChatId || isMapActive ? 'w-full' : 'hidden md:flex'}`}>
+        {isMapActive ? (
+          <div className="h-full w-full relative">
+            <div className="md:hidden bg-white p-3 border-b border-slate-200 flex items-center justify-between px-3.5 z-20 relative shrink-0">
+              <button
+                onClick={() => setIsMapActive(false)}
+                className="p-2 text-blue-600 hover:bg-slate-50 rounded-lg flex items-center gap-1 cursor-pointer transition-colors font-bold text-xs"
+              >
+                <ChevronLeft className="w-5 h-5 shrink-0" />
+                <span>Volver a la lista</span>
+              </button>
+            </div>
+            <MapView
+              currentUserProfile={userProfile}
+              onlineUsers={onlineUsers}
+              onSelectUser={(u) => {
+                handleSelectUser(u);
+                setIsMapActive(false);
+              }}
+              onCloseMap={() => setIsMapActive(false)}
+            />
+          </div>
+        ) : activeChat ? (
           <div key={selectedChatId} className="h-full flex flex-col flex-1 relative">
             {/* Mobile navigation row: Allows user to click back to roster list */}
             <div className="md:hidden bg-white p-3 border-b border-slate-200 flex items-center gap-1.5 px-3.5 z-10 shrink-0">
@@ -1056,28 +1087,40 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.4 }}
-              className="max-w-md bg-white border border-slate-200 p-8 rounded-3xl shadow-xl"
+              className="max-w-md bg-white border border-slate-200 p-8 rounded-3xl shadow-xl flex flex-col items-center"
             >
               <div className="inline-flex p-4 bg-yellow-405/15 border border-yellow-205 text-yellow-600 rounded-full mb-4 shadow-md shadow-yellow-100">
                 <span className="text-4xl">🛵</span>
               </div>
-              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">MotoChatPro</h2>
+              <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">MotoGo</h2>
+              <p className="text-xs text-slate-500 mt-1 font-semibold">
+                Servicio de mototaxis en tiempo real
+              </p>
+
+              {/* Action button to open Map directly */}
+              <button
+                onClick={() => setIsMapActive(true)}
+                className="mt-5 w-full py-3.5 px-4 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95"
+              >
+                <span className="text-base">🗺️</span>
+                <span>Ver Mapa MotoGo en Vivo</span>
+              </button>
               
               {userProfile?.role === 'cliente' ? (
                 <>
-                  <p className="text-xs text-slate-500 mt-2.5 leading-relaxed font-medium">
-                    ¡Hola! Comienza seleccionando uno de los **Mototaxistas Conectados** en la lista lateral para iniciar un chat directo y solicitar tu servicio de transporte.
+                  <p className="text-xs text-slate-500 mt-4 leading-relaxed font-medium">
+                    ¡Hola! Comienza seleccionando uno de los **Mototaxistas Conectados** en la lista lateral o abre el **Mapa en Vivo** para solicitar tu servicio de transporte.
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed">
+                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed w-full">
                     💡 **Escritura Rápida:** Una vez que abras el chat, usa los botones directos para enviar tu ubicación rápida o consultar tarifas al instante.
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-xs text-slate-505 mt-2.5 leading-relaxed font-sans font-medium">
+                  <p className="text-xs text-slate-505 mt-4 leading-relaxed font-sans font-medium">
                     Bienvenido Conductor. Mantén la aplicación abierta para aparecer **en línea** ante los clientes disponibles en la plataforma.
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed">
+                  <p className="text-[11px] text-slate-500 mt-4 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-left font-mono leading-relaxed w-full">
                     💡 **Traspaso de Servicios:** Si recibes un servicio y no puedes atenderlo por distancia o tiempo, búscalo en la lista lateral de compañeros en línea y presiona el botón naranja para **Traspasarlo** en tiempo real.
                   </p>
                 </>

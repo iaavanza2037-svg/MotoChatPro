@@ -1,6 +1,6 @@
 {
-  "name": "MotoChatPro",
-  "description": "Una aplicación de chat en tiempo real para servicio de motos, mototaxis y taxis con inicio de sesión por correo, estado en línea, teclado de caracteres especiales y transferencia de servicios.",
+  "name": "MotoGo",
+  "description": "Aplicación de transporte y chat en tiempo real para mototaxis con integración de Google Maps, estado en línea, geolocalización y transferencia de servicios.",
   "requestFramePermissions": ["geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

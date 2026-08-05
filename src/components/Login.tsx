@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { motion } from 'motion/react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword 
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
@@ -16,7 +17,11 @@ import {
   Shield, 
   AlertCircle, 
   MapPin, 
-  ArrowRight 
+  ArrowRight,
+  KeyRound,
+  Check,
+  X,
+  Mail
 } from 'lucide-react';
 
 const ZONAS_PRESETS = [
@@ -55,6 +60,58 @@ export default function Login({ onAuthSuccess }: LoginProps) {
   const [customZone, setCustomZone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Remember Credentials State
+  const [rememberMe, setRememberMe] = useState(() => {
+    return localStorage.getItem('motogo_remember_me') === 'true';
+  });
+
+  // Password Recovery Modal State
+  const [isResetOpen, setIsResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
+  const [resetErrorMsg, setResetErrorMsg] = useState<string | null>(null);
+
+  // Prefill email & password on mount if Remember Me is enabled
+  useEffect(() => {
+    if (localStorage.getItem('motogo_remember_me') === 'true') {
+      const savedEmail = localStorage.getItem('motogo_remember_email') || '';
+      const savedPassword = localStorage.getItem('motogo_remember_password') || '';
+      if (savedEmail) setEmail(savedEmail);
+      if (savedPassword) setPassword(savedPassword);
+    }
+  }, []);
+
+  // Password Reset Handler
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetErrorMsg(null);
+    setResetSuccessMsg(null);
+
+    const trimmed = resetEmail.trim();
+    if (!trimmed) {
+      setResetErrorMsg('Por favor ingresa tu correo electrónico.');
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmed);
+      setResetSuccessMsg(`¡Correo de recuperación enviado a ${trimmed}! Revisa tu bandeja de entrada o carpeta de spam.`);
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === 'auth/user-not-found') {
+        setResetErrorMsg('No se encontró ninguna cuenta registrada con este correo electrónico.');
+      } else if (err.code === 'auth/invalid-email') {
+        setResetErrorMsg('La dirección de correo electrónico no es válida.');
+      } else {
+        setResetErrorMsg(err.message || 'Error al enviar el correo de recuperación.');
+      }
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   // Sync role selector
   const handleSetRole = (newRole: 'cliente' | 'moto') => {
@@ -125,6 +182,17 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           ...(role === 'moto' && mototaxiNumber.trim() ? { mototaxiNumber: mototaxiNumber.trim() } : {})
         });
 
+        // Save remember credentials preference if requested
+        if (rememberMe) {
+          localStorage.setItem('motogo_remember_me', 'true');
+          localStorage.setItem('motogo_remember_email', trimmedEmail);
+          localStorage.setItem('motogo_remember_password', trimmedPassword);
+        } else {
+          localStorage.removeItem('motogo_remember_me');
+          localStorage.removeItem('motogo_remember_email');
+          localStorage.removeItem('motogo_remember_password');
+        }
+
         localStorage.removeItem('moto_chat_pending_registration');
         onAuthSuccess();
       } else {
@@ -158,6 +226,18 @@ export default function Login({ onAuthSuccess }: LoginProps) {
         }
 
         await setDoc(userDocRef, updateData, { merge: true });
+
+        // Save remember credentials preference if requested
+        if (rememberMe) {
+          localStorage.setItem('motogo_remember_me', 'true');
+          localStorage.setItem('motogo_remember_email', trimmedEmail);
+          localStorage.setItem('motogo_remember_password', trimmedPassword);
+        } else {
+          localStorage.removeItem('motogo_remember_me');
+          localStorage.removeItem('motogo_remember_email');
+          localStorage.removeItem('motogo_remember_password');
+        }
+
         localStorage.removeItem('moto_chat_pending_registration');
         onAuthSuccess();
       }
@@ -166,13 +246,13 @@ export default function Login({ onAuthSuccess }: LoginProps) {
       console.error(err);
       let localizedMsg = 'Ocurrió un error al autenticar. Por favor reintenta.';
       if (err.code === 'auth/email-already-in-use') {
-        localizedMsg = 'Este correo electrónico ya está registrado. Intenta iniciar sesión.';
+        localizedMsg = 'Este correo electrónico ya está registrado. Haz clic en "Iniciar Sesión" arriba para acceder.';
       } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-        localizedMsg = 'Credenciales de acceso incorrectas. Verifica tu correo y contraseña.';
+        localizedMsg = 'Correo o contraseña incorrectos (o la cuenta aún no existe). Si es tu primera vez, cambia a la pestaña "Registrarse".';
       } else if (err.code === 'auth/invalid-email') {
-        localizedMsg = 'La dirección de correo electrónico provista no es válida.';
+        localizedMsg = 'La dirección de correo electrónico ingresada no es válida.';
       } else if (err.code === 'auth/weak-password') {
-        localizedMsg = 'La contraseña ingresada es muy débil (mínimo 6 caracteres).';
+        localizedMsg = 'La contraseña ingresada es muy corta (mínimo 6 caracteres).';
       } else if (err.message) {
         localizedMsg = err.message;
       }
@@ -207,9 +287,9 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           <div className="inline-flex p-3 bg-yellow-400 text-slate-900 rounded-full mb-2.5 shadow-md">
             <span className="text-2xl font-bold">🛵</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">MotoChatPro</h1>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">MotoGo</h1>
           <p className="text-slate-500 mt-1 text-xs leading-relaxed max-w-xs mx-auto">
-            Tu servicio de motos y taxis rápidos en tiempo real (Langue y Zonas Cercanas)
+            Tu servicio de motos y taxis rápidos en tiempo real con mapa interactivo (Langue y Zonas Cercanas)
           </p>
         </div>
 
@@ -244,10 +324,29 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="mb-5 p-3 bg-red-50 border border-red-200 rounded-2xl text-red-850 text-xs flex gap-2 items-start font-medium leading-relaxed"
+            className="mb-5 p-3.5 bg-red-50 border border-red-200 rounded-2xl text-red-850 text-xs flex gap-2 items-start font-medium leading-relaxed shadow-sm"
           >
             <AlertCircle className="text-red-500 shrink-0 mt-0.5 w-4 h-4" />
-            <div className="flex-1 text-slate-700">{error}</div>
+            <div className="flex-1 text-slate-700">
+              <p>{error}</p>
+              {!isSignUp ? (
+                <button
+                  type="button"
+                  onClick={() => { setIsSignUp(true); setError(null); }}
+                  className="mt-2 text-[11px] font-extrabold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <span>👉 Crear cuenta nueva en "Registrarse"</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setIsSignUp(false); setError(null); }}
+                  className="mt-2 text-[11px] font-extrabold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <span>👉 Cambiar a "Iniciar Sesión"</span>
+                </button>
+              )}
+            </div>
           </motion.div>
         )}
 
@@ -385,6 +484,34 @@ export default function Login({ onAuthSuccess }: LoginProps) {
               />
             </div>
 
+            {/* Remember Me & Forgot Password controls (Only during Sign In) */}
+            {!isSignUp && (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-1 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer text-slate-600 font-semibold select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 text-yellow-500 bg-slate-50 border-slate-300 rounded focus:ring-yellow-400 focus:ring-1 cursor-pointer"
+                  />
+                  <span className="text-[11px] text-slate-700">Recordar mis datos de acceso</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetEmail(email || '');
+                    setResetSuccessMsg(null);
+                    setResetErrorMsg(null);
+                    setIsResetOpen(true);
+                  }}
+                  className="text-[11px] font-extrabold text-blue-600 hover:underline cursor-pointer"
+                >
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </div>
+            )}
+
             {/* Zona / Ubicación - shown ONLY during registration */}
             {isSignUp && (
               <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1.5">
@@ -439,6 +566,93 @@ export default function Login({ onAuthSuccess }: LoginProps) {
           🔒 Sesión totalmente persistente: la aplicación se mantendrá abierta y conectada incluso si la minimizas, cierras o reinicias tu dispositivo móvil.
         </p>
       </motion.div>
+
+      {/* Modal de Recuperación de Contraseña */}
+      <AnimatePresence>
+        {isResetOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 10 }}
+              className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-200 relative text-slate-800"
+            >
+              <button
+                type="button"
+                onClick={() => setIsResetOpen(false)}
+                className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="text-center mb-5">
+                <div className="inline-flex p-3 bg-blue-50 text-blue-600 rounded-2xl mb-2.5 shadow-sm">
+                  <KeyRound className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-extrabold text-slate-900">Recuperar Contraseña</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Ingresa tu correo electrónico registrado y te enviaremos un enlace oficial para restablecer tu contraseña.
+                </p>
+              </div>
+
+              {resetSuccessMsg ? (
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs flex gap-2.5 items-start font-medium leading-relaxed">
+                    <Check className="text-emerald-600 shrink-0 w-5 h-5 mt-0.5" />
+                    <span>{resetSuccessMsg}</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsResetOpen(false)}
+                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-3 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Entendido / Volver al Inicio
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleResetPassword} className="space-y-4">
+                  {resetErrorMsg && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex gap-2 items-center font-medium">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                      <span>{resetErrorMsg}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-bold mb-1 uppercase tracking-wider">
+                      Correo Electrónico
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="email"
+                        required
+                        placeholder="tu-correo@ejemplo.com"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-9 pr-3 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-semibold"
+                      />
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold text-xs uppercase tracking-wider py-3 rounded-xl shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    {resetLoading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <span>Enviar Enlace de Recuperación</span>
+                    )}
+                  </button>
+                </form>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Compass, MapPin, Volume2, AlertTriangle, RefreshCw, Terminal, ArrowRight } from 'lucide-react';
+import { Compass, MapPin, Volume2, AlertTriangle, RefreshCw, Terminal, ArrowRight, X } from 'lucide-react';
 import { GpsEnvInfo, GpsStatus, TrackingState } from '../hooks/useGpsTracker';
 
 interface PermissionsOverlayProps {
@@ -67,29 +67,40 @@ export default function PermissionsOverlay({
         initial={{ opacity: 0, scale: 0.93, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.3, ease: 'easeOut' }}
-        className="w-full max-w-md bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden flex flex-col relative my-8"
+        className="w-full max-w-md bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden flex flex-col relative my-4 max-h-[90vh]"
       >
         {/* Dynamic Header Decoration */}
-        <div className="bg-gradient-to-br from-yellow-400 to-yellow-500 p-6 text-slate-950 relative">
-          <div className="absolute top-4 right-4 bg-white/20 hover:bg-white/30 text-[9px] font-bold py-1 px-2.5 rounded-full uppercase tracking-wider font-mono select-none">
-            {gpsEnvInfo.mobileBrand}
+        <div className="bg-gradient-to-br from-yellow-400 to-yellow-500 p-5 sm:p-6 text-slate-950 relative shrink-0">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="bg-white/20 text-[9px] font-bold py-1 px-2.5 rounded-full uppercase tracking-wider font-mono select-none">
+              {gpsEnvInfo.mobileBrand}
+            </div>
+
+            <button
+              type="button"
+              onClick={onBypass}
+              className="p-1.5 bg-slate-950/10 hover:bg-slate-950/25 text-slate-950 rounded-full transition-all cursor-pointer flex items-center justify-center"
+              title="Cerrar y continuar sin GPS"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
           
           <div className="flex items-center gap-3">
-            <div className="bg-slate-950 text-yellow-400 p-3 rounded-full shadow-lg shadow-yellow-600/30">
-              <Compass className="w-7 h-7 shrink-0 animate-spin-slow" />
+            <div className="bg-slate-950 text-yellow-400 p-2.5 rounded-full shadow-lg shadow-yellow-600/30">
+              <Compass className="w-6 h-6 shrink-0 animate-spin-slow" />
             </div>
             <div>
-              <h1 className="text-xl font-extrabold tracking-tight">Paso Obligatorio: Configuración de GPS</h1>
+              <h1 className="text-lg font-extrabold tracking-tight">Configuración de GPS</h1>
               <p className="text-[11px] text-slate-900 font-medium leading-tight mt-0.5">
-                Para que funcione el emparejamiento automático por proximidad de 15km.
+                Para el emparejamiento automático por proximidad de 15km.
               </p>
             </div>
           </div>
         </div>
 
         {/* Content Wizard Body */}
-        <div className="p-5 flex-1 flex flex-col gap-4 text-slate-755">
+        <div className="p-5 flex-1 flex flex-col gap-4 text-slate-755 overflow-y-auto">
           
           {/* Conditional 1: Social Media WebView Lockout Warning */}
           {isSocialMedia && (

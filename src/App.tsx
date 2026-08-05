@@ -91,7 +91,14 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [redirectResultChecked, setRedirectResultChecked] = useState(false);
-  const [bypassOverlay, setBypassOverlay] = useState(false);
+  const [bypassOverlay, setBypassOverlay] = useState(() => {
+    return localStorage.getItem('motogo_gps_bypassed') === 'true';
+  });
+
+  const handleBypassOverlay = () => {
+    localStorage.setItem('motogo_gps_bypassed', 'true');
+    setBypassOverlay(true);
+  };
   const [isMapActive, setIsMapActive] = useState(false);
 
   // Integrated Robust GPS tracker module (Requirements 1, 2, 7, 8, 13, 17, 18)
@@ -134,6 +141,13 @@ export default function App() {
       }
     }
   });
+
+  useEffect(() => {
+    if (gpsStatus === 'granted') {
+      localStorage.removeItem('motogo_gps_bypassed');
+      setBypassOverlay(false);
+    }
+  }, [gpsStatus]);
 
   // React to GPS loss, disablement, or revoking by turning off hasGPS flag in Firestore
   useEffect(() => {
@@ -979,7 +993,7 @@ export default function App() {
           gpsLogs={gpsLogs}
           isSensorOff={gpsIsSensorOff}
           onGrantGps={handleRetryGps}
-          onBypass={() => setBypassOverlay(true)}
+          onBypass={handleBypassOverlay}
         />
       )}
 

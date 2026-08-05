@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 export enum OperationType {
@@ -38,8 +38,10 @@ setPersistence(auth, browserLocalPersistence).catch((err) => {
   console.warn("Failed to set auth persistence:", err);
 });
 
-// Initialize Firestore (utilizing firestoreDatabaseId is CRITICAL)
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Initialize Firestore with auto-detect long polling to ensure robust connectivity across mobile networks and proxies
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true
+}, firebaseConfig.firestoreDatabaseId);
 
 /**
  * Custom error handler for Firestore permission errors to provide deep diagnostics.

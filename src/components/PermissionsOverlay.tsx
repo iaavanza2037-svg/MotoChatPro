@@ -104,23 +104,9 @@ export default function PermissionsOverlay({
           
           {/* Conditional 1: Social Media WebView Lockout Warning */}
           {isSocialMedia && (
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 flex flex-col gap-2 text-xs text-slate-800">
-              <div className="flex items-center gap-2 text-amber-600 font-extrabold uppercase tracking-wide text-[10.5px]">
-                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500 animate-pulse" />
-                <span>Navegador de WhatsApp / Facebook Detectado</span>
-              </div>
-              <p className="leading-relaxed">
-                Estás abriendo la aplicación desde un enlace interno dentro de una red social. Estas tecnologías por seguridad <strong>bloquean por defecto el acceso GPS y la ubicación en segundo plano</strong>.
-              </p>
-              <div className="bg-amber-400/20 p-3 rounded-xl border border-amber-400/30 space-y-1 text-[11px]">
-                <p className="font-extrabold text-slate-900 flex items-center gap-1">
-                  💡 Solución fácil para abrir el GPS:
-                </p>
-                <ol className="list-decimal list-inside space-y-1 text-slate-800 font-medium pl-1">
-                  <li>Toca los <strong>3 puntos •••</strong> arriba a la derecha de tu pantalla.</li>
-                  <li>Selecciona la opción <strong>"Abrir en Chrome"</strong>, <strong>"Abrir en Safari"</strong> o <strong>"Abrir en el navegador"</strong>.</li>
-                </ol>
-              </div>
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-3.5 flex items-center gap-2 text-xs text-amber-800 font-bold">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500 animate-pulse" />
+              <span>Navegador de WhatsApp / Redes Sociales Detectado</span>
             </div>
           )}
 
@@ -197,48 +183,6 @@ export default function PermissionsOverlay({
               )}
             </div>
 
-            {/* Instruction block if GPS toggled off (Sensor Off) */}
-            {isSensorOff && (
-              <div className="text-[11px] text-slate-650 bg-amber-400/5 border border-amber-500/10 p-3 rounded-xl space-y-1.5 mt-2">
-                <p className="font-bold text-amber-700 leading-tight">📍 Tu celular tiene la Ubicación desactivada:</p>
-                <ol className="list-decimal list-inside space-y-1.5 text-slate-700 leading-normal pl-0.5">
-                  <li>Desliza la barra superior de notificaciones de tu celular (menú rápido).</li>
-                  <li>Busca y enciende el botón de <strong>Ubicación</strong> o <strong>GPS</strong>.</li>
-                  <li className="text-emerald-600 font-bold">
-                    ⚡ ¡Sincronización Inteligente! Una vez que lo enciendas, la aplicación se conectará automáticamente en pocos segundos sin necesidad de tocar nada.
-                  </li>
-                </ol>
-              </div>
-            )}
-
-            {/* Instruction block if Denied */}
-            {!isSensorOff && gpsStatus === 'denied' && (
-              <div className="text-[11px] text-slate-700 bg-red-400/5 border border-red-500/10 p-4 rounded-xl space-y-3 mt-2">
-                <p className="font-extrabold text-red-600 leading-tight">⚠️ ¿Cómo solucionar el bloqueo de GPS?</p>
-                
-                <div className="space-y-1 pb-1 border-b border-red-500/10">
-                  <p className="font-extrabold text-amber-700 flex items-center gap-1">🌐 Opción A: Si estás en Navegadores (Chrome, Safari, etc.)</p>
-                  <ol className="list-decimal list-inside space-y-1 text-slate-700 leading-normal pl-0.5">
-                    <li>Toca el icono del candado <strong className="text-slate-900">🔒</strong> arriba de tu dirección web.</li>
-                    <li>Busca <strong>"Ubicación"</strong> y cámbialo de Bloqueado a <strong>"Permitir"</strong>.</li>
-                  </ol>
-                </div>
-
-                <div className="space-y-1">
-                  <p className="font-extrabold text-blue-700 flex items-center gap-1">📱 Opción B: Si usas la App / PWA o Celular Android</p>
-                  <ol className="list-decimal list-inside space-y-1 text-slate-700 leading-normal pl-0.5">
-                    <li>Al ser una WebApp/PWA, Android gestiona los permisos a través de tu navegador <strong>Chrome</strong> (por eso en Ajustes de la App de Android puede salir 'sin permisos').</li>
-                    <li>Abre <strong>Chrome</strong> ➔ Toca los <strong>3 puntos •••</strong> arriba a la derecha ➔ <strong>Configuración</strong> ➔ <strong>Configuración de sitios</strong> ➔ <strong>Ubicación</strong>.</li>
-                    <li>Busca este sitio web y cámbialo a <strong>"Permitir"</strong>.</li>
-                  </ol>
-                </div>
-
-                <div className="text-emerald-600 font-bold flex items-center gap-1 text-[10.5px] pt-1 border-t border-red-500/10">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <span>Se conectará solo en segundos al cambiar los ajustes.</span>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Action trigger layouts */}
@@ -247,10 +191,10 @@ export default function PermissionsOverlay({
               type="button"
               onClick={handleTestSoundAndStart}
               disabled={gpsTrackingState === 'searching' && gpsStatus === 'prompt'}
-              className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-extrabold rounded-2xl py-3 px-4 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] outline-none shadow-lg shadow-yellow-500/10 text-xs tracking-wider uppercase"
+              className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-extrabold rounded-2xl py-3.5 px-4 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] outline-none shadow-lg shadow-yellow-500/10 text-xs tracking-wider uppercase"
             >
               <Compass className="w-4.5 h-4.5 animate-spin-slow shrink-0" />
-              <span>{gpsStatus === 'denied' ? 'Reintentar Permitir Ubicación' : 'Activar Ubicación y Permisos'}</span>
+              <span>{gpsStatus === 'denied' || isSensorOff ? 'Conceder / Reintentar GPS' : 'Activar Ubicación y Permisos'}</span>
               <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
 

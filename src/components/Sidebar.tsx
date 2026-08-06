@@ -360,58 +360,10 @@ export default function Sidebar({
             {/* GPS Interactive status indicators & guidance */}
             {isSensorOff ? (
               <div className="bg-amber-500/10 border border-amber-500/15 rounded-lg p-2.5 flex flex-col gap-2 text-[9px] text-slate-300">
-                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-550 bg-amber-500 animate-ping" />
-                  <span>GPS del Celular Apagado</span>
-                </div>
-                
-                <p className="leading-relaxed text-slate-300 font-medium">
-                  El sensor físico de tu teléfono está inactivo. Enciéndelo para conectarte de nuevo.
-                </p>
-
-                <div className="bg-slate-950/40 p-2 rounded border border-slate-800 text-[8px] text-slate-400 leading-normal space-y-1">
-                  <p className="font-bold text-amber-500 font-extrabold">¿Cómo solucionarlo?</p>
-                  <ol className="list-decimal list-inside space-y-0.5">
-                    <li>Desliza la barra superior de tu dispositivo.</li>
-                    <li>Busca y presiona el ícono de <strong className="text-white">Ubicación / GPS</strong>.</li>
-                    <li className="text-emerald-400 font-bold">⚡ Se conectará solo en segundos al encenderlo.</li>
-                  </ol>
-                </div>
-              </div>
-            ) : gpsStatus === 'denied' || gpsTrackingState === 'error' ? (
-              <div className="bg-red-500/10 border border-red-500/15 rounded-lg p-2.5 flex flex-col gap-2 text-[9px] text-slate-300">
-                <div className="flex items-center gap-1.5 text-red-400 font-bold">
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                  <span>Ubicación GPS Bloqueada</span>
-                </div>
-                
-                <p className="leading-relaxed text-slate-300 font-medium">
-                  Has denegado el permiso de ubicación o la configuración de tu celular restringe el GPS.
-                </p>
-
-                <div className="bg-slate-950/40 p-2.5 rounded border border-slate-800 text-[8px] text-slate-400 leading-normal space-y-2">
-                  <p className="font-bold text-yellow-500 text-[9px] uppercase tracking-wider">¿Cómo solucionarlo?</p>
-                  
-                  <div>
-                    <p className="font-extrabold text-amber-400">Opción A: Si estás en Navegadores Web (Chrome, Safari, etc.)</p>
-                    <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
-                      <li>Toca el candado o engrane <strong className="text-white">🔒</strong> junto a la barra de dirección arriba.</li>
-                      <li>Cambia "Ubicación" de Bloqueado a <strong className="text-white">"Permitir"</strong>.</li>
-                    </ol>
-                  </div>
-
-                  <div>
-                    <p className="font-extrabold text-sky-400">Opción B: Si estás dentro de la App / PWA o Redes Sociales</p>
-                    <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
-                      <li>Ve a los Ajustes generales de tu celular ➔ <strong className="text-white">Aplicaciones</strong>.</li>
-                      <li>Busca y selecciona la app <strong className="text-white">Moto Chat</strong> (o tu navegador web si entraste por un link de WhatsApp).</li>
-                      <li>Entra a <strong className="text-white">Permisos</strong> ➔ <strong className="text-white">Ubicación</strong> y actívala (selecciona "Permitir siempre" o "Permitir con la app en uso").</li>
-                    </ol>
-                  </div>
-
-                  <div className="border-t border-slate-800/80 pt-1 text-emerald-400 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                    <span>Se reconectará automáticamente de inmediato al activarlo.</span>
+                <div className="flex items-center justify-between gap-1 text-amber-400 font-bold">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                    <span>GPS del Celular Apagado</span>
                   </div>
                 </div>
 
@@ -419,10 +371,30 @@ export default function Sidebar({
                   <button
                     type="button"
                     onClick={onRetryGps}
-                    className="mt-0.5 w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-1.5 px-1.5 flex items-center justify-center gap-1 cursor-pointer transition-all active:scale-95 text-[9px] tracking-wider uppercase font-mono shadow-sm"
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-2 px-2 flex items-center justify-center gap-1 cursor-pointer transition-all active:scale-95 text-[9px] tracking-wider uppercase font-mono shadow-sm"
                   >
                     <RefreshCw className="w-3 h-3 animate-spin duration-1000" />
-                    <span>Conceder/Reintentar GPS</span>
+                    <span>Conceder / Reintentar GPS</span>
+                  </button>
+                )}
+              </div>
+            ) : gpsStatus === 'denied' || gpsTrackingState === 'error' ? (
+              <div className="bg-red-500/10 border border-red-500/15 rounded-lg p-2.5 flex flex-col gap-2 text-[9px] text-slate-300">
+                <div className="flex items-center justify-between gap-1 text-red-400 font-bold">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                    <span>Ubicación GPS Bloqueada</span>
+                  </div>
+                </div>
+
+                {onRetryGps && (
+                  <button
+                    type="button"
+                    onClick={onRetryGps}
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-bold rounded-lg py-2 px-2 flex items-center justify-center gap-1 cursor-pointer transition-all active:scale-95 text-[9px] tracking-wider uppercase font-mono shadow-sm"
+                  >
+                    <RefreshCw className="w-3 h-3 animate-spin duration-1000" />
+                    <span>Conceder / Reintentar GPS</span>
                   </button>
                 )}
               </div>

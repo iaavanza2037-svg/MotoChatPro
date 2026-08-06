@@ -225,11 +225,11 @@ export default function PermissionsOverlay({
                 </div>
 
                 <div className="space-y-1">
-                  <p className="font-extrabold text-blue-700 flex items-center gap-1">📱 Opción B: Si usas la App / PWA o Redes Sociales</p>
+                  <p className="font-extrabold text-blue-700 flex items-center gap-1">📱 Opción B: Si usas la App / PWA o Celular Android</p>
                   <ol className="list-decimal list-inside space-y-1 text-slate-700 leading-normal pl-0.5">
-                    <li>Entra a los <strong>Ajustes principales</strong> de tu celular ➔ <strong>Aplicaciones</strong>.</li>
-                    <li>Selecciona la app <strong className="text-slate-900">Moto Chat</strong> (o tu navegador Chrome/Safari si entraste por red social).</li>
-                    <li>Selecciona <strong>"Permisos"</strong> ➔ <strong>"Ubicación"</strong> y cámbialo a <strong>"Permitir con la app en uso o siempre"</strong>.</li>
+                    <li>Al ser una WebApp/PWA, Android gestiona los permisos a través de tu navegador <strong>Chrome</strong> (por eso en Ajustes de la App de Android puede salir 'sin permisos').</li>
+                    <li>Abre <strong>Chrome</strong> ➔ Toca los <strong>3 puntos •••</strong> arriba a la derecha ➔ <strong>Configuración</strong> ➔ <strong>Configuración de sitios</strong> ➔ <strong>Ubicación</strong>.</li>
+                    <li>Busca este sitio web y cámbialo a <strong>"Permitir"</strong>.</li>
                   </ol>
                 </div>
 

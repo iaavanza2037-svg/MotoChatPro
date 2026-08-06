@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useAdvancedMarkerRef } from '@vis.gl/react-google-maps';
+import React, { useState, useMemo, useEffect } from 'react';
+import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useAdvancedMarkerRef, useMap } from '@vis.gl/react-google-maps';
 import { UserProfile } from '../types';
 import { ZONAS_COORDINATES, getHaversineDistance } from '../utils/location';
 import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, ExternalLink } from 'lucide-react';
@@ -14,6 +14,33 @@ interface MapViewProps {
   onlineUsers: UserProfile[];
   onSelectUser: (user: UserProfile, initialMessage?: string) => void;
   onCloseMap?: () => void;
+}
+
+// Visual 1 km Radius Circle Overlay on the map
+function Radius1KmCircle({ center }: { center: { lat: number; lng: number } }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map) return;
+
+    const circle = new google.maps.Circle({
+      strokeColor: '#EAB308', // yellow-500
+      strokeOpacity: 0.85,
+      strokeWeight: 2,
+      fillColor: '#EAB308',
+      fillOpacity: 0.12,
+      map,
+      center,
+      radius: 1000, // 1000 meters = 1 km radius
+      clickable: false,
+    });
+
+    return () => {
+      circle.setMap(null);
+    };
+  }, [map, center.lat, center.lng]);
+
+  return null;
 }
 
 const API_KEY =
@@ -245,15 +272,26 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
     );
   }
 
-  // Filter online mototaxis and online clients
+  // Filter online mototaxis and online clients according to user role
   const allMapUsers = useMemo(() => {
-    // Include current user plus other online users
+    const isClient = currentUserProfile.role === 'cliente';
+    
+    // Ensure current user is included
     const existsInOnline = onlineUsers.some(u => u.uid === currentUserProfile.uid);
-    if (!existsInOnline) {
-      return [currentUserProfile, ...onlineUsers];
+    const baseList = existsInOnline ? onlineUsers : [currentUserProfile, ...onlineUsers];
+
+    if (isClient) {
+      // Clients MUST see all mototaxistas ('moto') and themselves, but MUST NOT see other clients
+      return baseList.filter(u => u.uid === currentUserProfile.uid || u.role === 'moto');
+    } else {
+      // Drivers see everyone (clients seeking service & other drivers)
+      return baseList;
     }
-    return onlineUsers;
   }, [currentUserProfile, onlineUsers]);
+
+  const activeMototaxisCount = useMemo(() => {
+    return onlineUsers.filter(u => u.role === 'moto').length;
+  }, [onlineUsers]);
 
   return (
     <div className="h-full w-full relative flex flex-col bg-slate-100">
@@ -263,8 +301,14 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
           <span className="text-xl">🛵</span>
           <div>
             <h3 className="font-extrabold text-xs tracking-wide">Mapa MotoGo en Vivo</h3>
-            <p className="text-[9px] text-slate-300 font-mono">
-              {onlineUsers.filter(u => u.role === 'moto').length} Mototaxis en línea
+            <p className="text-[9px] text-yellow-400 font-mono font-bold flex items-center gap-1">
+              <span>📍 Radio 1km</span>
+              <span className="text-slate-400">•</span>
+              <span className="text-slate-200">
+                {currentUserProfile.role === 'cliente' 
+                  ? `${activeMototaxisCount} Mototaxis disponibles` 
+                  : `${onlineUsers.length} Usuarios en línea`}
+              </span>
             </p>
           </div>
         </div>
@@ -283,13 +327,16 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
       <APIProvider apiKey={API_KEY} version="weekly">
         <Map
           defaultCenter={centerCoords}
-          defaultZoom={14}
+          defaultZoom={15}
           mapId="MOTOGO_MAP_ID"
           internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
           style={{ width: '100%', height: '100%' }}
           gestureHandling="greedy"
           disableDefaultUI={false}
         >
+          {/* Visual 1 km Coverage Radius Indicator */}
+          <Radius1KmCircle center={centerCoords} />
+
           {allMapUsers.map((u) => (
             <UserMarkerItem
               key={u.uid}

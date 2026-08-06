@@ -318,6 +318,9 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
             setCoords(null);
           } else {
             setGpsStatus('prompt');
+            // Auto-trigger position watch so browser prompts for permission immediately on mobile
+            isStartedRef.current = true;
+            startTracking(false);
           }
           result.addEventListener('change', handlePermissionChange);
           addLog(`Suscrito a cambios del permiso de geolocalización (${result.state})`);
@@ -326,7 +329,7 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
           // Fallback to initial queryPermission check if permissions.query fails on iOS/older webviews
           queryPermission().then(state => {
             setGpsStatus(state);
-            if (state === 'granted') {
+            if (state === 'granted' || state === 'prompt') {
               isStartedRef.current = true;
               startTracking(false);
             }
@@ -336,7 +339,7 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
       // Fallback
       queryPermission().then(state => {
         setGpsStatus(state);
-        if (state === 'granted') {
+        if (state === 'granted' || state === 'prompt') {
           isStartedRef.current = true;
           startTracking(false);
         }

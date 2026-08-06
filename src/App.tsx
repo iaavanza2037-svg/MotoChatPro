@@ -623,7 +623,7 @@ export default function App() {
   }, [currentUser, selectedChatId]);
 
   // Action: Select or start a chat with an online user (Client only starts, or Driver selected client)
-  const handleSelectUser = async (targetUser: UserProfile) => {
+  const handleSelectUser = async (targetUser: UserProfile, initialMessage?: string) => {
     if (!userProfile) return;
 
     const clientId = userProfile.role === 'cliente' ? userProfile.uid : targetUser.uid;
@@ -651,17 +651,35 @@ export default function App() {
       clientDeleted: false,
       driverDeleted: false,
       isRated: false,
-      lastMessage: 'Servicio iniciado o restaurado. Esperando mensajes...',
+      lastMessage: initialMessage || 'Servicio iniciado o restaurado. Esperando mensajes...',
       lastMessageTime: Date.now()
     };
 
     try {
       await setDoc(chatDocRef, initialOrRestoredChat, { merge: true });
-      // Set selectedChatId ONLY after the document is successfully stored in Firestore so that permissions succeed.
+
+      if (initialMessage && initialMessage.trim()) {
+        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        const newMessagePayload: ChatMessage = {
+          id: messageId,
+          chatId,
+          text: initialMessage.trim(),
+          senderId: currentUser?.uid || userProfile.uid,
+          senderName: userProfile.name,
+          timestamp: now,
+          type: 'text'
+        };
+        await setDoc(doc(db, `chats/${chatId}/messages`, messageId), newMessagePayload);
+      }
+
+      // Set selectedChatId and exit map view
       setSelectedChatId(chatId);
+      setIsMapActive(false);
     } catch (err) {
       console.warn("Background chat document creation/restoration error, setting client-side state anyway:", err);
       setSelectedChatId(chatId);
+      setIsMapActive(false);
     }
   };
 

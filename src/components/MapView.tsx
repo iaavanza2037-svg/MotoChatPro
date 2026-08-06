@@ -12,7 +12,7 @@ import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, E
 interface MapViewProps {
   currentUserProfile: UserProfile;
   onlineUsers: UserProfile[];
-  onSelectUser: (user: UserProfile) => void;
+  onSelectUser: (user: UserProfile, initialMessage?: string) => void;
   onCloseMap?: () => void;
 }
 
@@ -50,7 +50,7 @@ function UserMarkerItem({
   user: UserProfile;
   isCurrentUser: boolean;
   currentUserProfile: UserProfile;
-  onSelectUser: (user: UserProfile) => void;
+  onSelectUser: (user: UserProfile, initialMessage?: string) => void;
 }) {
   const [markerRef, marker] = useAdvancedMarkerRef();
   const [open, setOpen] = useState(false);
@@ -64,6 +64,9 @@ function UserMarkerItem({
   }, [isCurrentUser, myCoords, coords]);
 
   const isDriver = user.role === 'moto';
+  const myZone = currentUserProfile.zone || 'Langue (Centro)';
+
+  const defaultAutoMsg = `¡Hola ${user.name.split(' ')[0]}! Estoy en ${myZone}. ¿Estás disponible para un servicio de mototaxi?`;
 
   return (
     <>
@@ -100,26 +103,26 @@ function UserMarkerItem({
 
       {open && (
         <InfoWindow anchor={marker} onCloseClick={() => setOpen(false)}>
-          <div className="p-2 min-w-[210px] text-slate-800 font-sans">
+          <div className="p-2 min-w-[230px] max-w-[270px] text-slate-800 font-sans">
             <div className="flex items-center gap-2 mb-1.5 border-b border-slate-100 pb-1.5">
-              <span className="text-xl">{isDriver ? '🛵' : '👤'}</span>
-              <div>
-                <h4 className="font-extrabold text-xs text-slate-900 leading-tight">{user.name}</h4>
+              <span className="text-xl shrink-0">{isDriver ? '🛵' : '👤'}</span>
+              <div className="overflow-hidden">
+                <h4 className="font-extrabold text-xs text-slate-900 leading-tight truncate">{user.name}</h4>
                 <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
                   {isDriver ? 'Mototaxista en línea' : 'Cliente en línea'}
                 </p>
               </div>
             </div>
 
-            <div className="space-y-1 text-[11px] text-slate-600 mb-2">
+            <div className="space-y-1 text-[11px] text-slate-600 mb-2.5">
               <p className="flex items-center gap-1">
-                <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                <span className="font-semibold">{user.zone || 'Langue (Centro)'}</span>
+                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <span className="font-semibold truncate">{user.zone || 'Langue (Centro)'}</span>
               </p>
 
               {user.phone && (
                 <p className="flex items-center gap-1 font-mono font-bold text-slate-700">
-                  <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                  <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   <span>{user.phone}</span>
                 </p>
               )}
@@ -132,8 +135,8 @@ function UserMarkerItem({
 
               {isDriver && (user.averageRating || 0) > 0 && (
                 <p className="flex items-center gap-1 text-[10px] font-bold text-amber-600">
-                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  <span>{user.averageRating?.toFixed(1)} / 5.0 ({user.ratingCount || 0} calificaciones)</span>
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
+                  <span>{user.averageRating?.toFixed(1)} / 5.0 ({user.ratingCount || 0} res)</span>
                 </p>
               )}
 
@@ -145,16 +148,33 @@ function UserMarkerItem({
             </div>
 
             {!isCurrentUser && (
-              <button
-                onClick={() => {
-                  setOpen(false);
-                  onSelectUser(user);
-                }}
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-[10px] uppercase tracking-wider py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
-              >
-                <MessageSquare className="w-3.5 h-3.5 text-yellow-400" />
-                <span>Abrir Chat / Pedir Servicio</span>
-              </button>
+              <div className="space-y-1.5 border-t border-slate-100 pt-2">
+                {/* Auto Service Request Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    onSelectUser(user, defaultAutoMsg);
+                  }}
+                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider py-2 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+                >
+                  <Navigation className="w-3.5 h-3.5 fill-slate-950" />
+                  <span>🚀 Solicitar Servicio Automático</span>
+                </button>
+
+                {/* Direct Chat Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    onSelectUser(user);
+                  }}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-yellow-400" />
+                  <span>💬 Abrir Chat Directo</span>
+                </button>
+              </div>
             )}
           </div>
         </InfoWindow>

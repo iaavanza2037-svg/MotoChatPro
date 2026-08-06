@@ -313,7 +313,7 @@ export default function Sidebar({
             )}
 
             {/* In-App Social Media Browser / OS Detection warning - REQUIREMENT 11 & 12 */}
-            {(gpsEnvInfo.isSocialMedia || gpsEnvInfo.isWebView) && (
+            {gpsEnvInfo.isSocialMedia && gpsStatus !== 'granted' && (
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex flex-col gap-1.5 text-[9px] text-slate-300">
                 <div className="flex items-center gap-1.5 text-amber-400 font-bold">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 animate-bounce" />

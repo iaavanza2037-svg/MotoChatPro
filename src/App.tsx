@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, ChatSession, ChatMessage } from './types';
+import { UserProfile, ChatSession, ChatMessage, PanicAlert } from './types';
 import { getHaversineDistance, getNearestPresetZone } from './utils/location';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
@@ -29,7 +29,7 @@ import ChatWindow from './components/ChatWindow';
 import MapView from './components/MapView';
 import PermissionsOverlay from './components/PermissionsOverlay';
 import { useGpsTracker } from './hooks/useGpsTracker';
-import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2 } from 'lucide-react';
+import { Compass, ShieldAlert, CircleAlert, ChevronLeft, Send, CheckCircle2, Siren, PhoneCall } from 'lucide-react';
 
 // Helper to play synthesized alarm sound for 1.5 seconds (Ding-Ding! Ding-Ding!)
 function playLoudAlarmSound() {
@@ -101,6 +101,11 @@ export default function App() {
   };
   const [isMapActive, setIsMapActive] = useState(false);
 
+  // Panic Button & Emergency State
+  const [panicAlerts, setPanicAlerts] = useState<PanicAlert[]>([]);
+  const [showPanicModal, setShowPanicModal] = useState(false);
+  const [isActivatingPanic, setIsActivatingPanic] = useState(false);
+
   // Integrated Robust GPS tracker module (Requirements 1, 2, 7, 8, 13, 17, 18)
   const {
     gpsStatus,
@@ -135,6 +140,34 @@ export default function App() {
             lastActive: Date.now()
           });
           console.log(`[GPS API Callback] Ubicación actualizada: ${lat}, ${lon} (${nearestZone})`);
+
+          // Inteligente: Registrar punto de trayectoria real en la base de datos de calles
+          try {
+            const trajDocRef = doc(db, 'trajectories', currentUser.uid);
+            const trajSnap = await getDoc(trajDocRef);
+            let points: Array<{ lat: number; lng: number; timestamp: number; accuracy: number }> = [];
+            if (trajSnap.exists() && Array.isArray(trajSnap.data().points)) {
+              points = trajSnap.data().points;
+            }
+            if (points.length >= 120) {
+              points = points.slice(-100);
+            }
+            points.push({ lat, lng: lon, timestamp: Date.now(), accuracy });
+
+            await setDoc(
+              trajDocRef,
+              {
+                userId: currentUser.uid,
+                userName: userProfile.name,
+                userRole: userProfile.role,
+                points,
+                lastUpdated: Date.now(),
+              },
+              { merge: true }
+            );
+          } catch (tErr) {
+            console.warn('[Trajectory Feed] Error registrando trayectoria:', tErr);
+          }
         } catch (err) {
           console.warn("[GPS API Callback] Error actualizando firestore con coordenadas:", err);
         }
@@ -477,6 +510,95 @@ export default function App() {
 
     return () => unsubUsers();
   }, [currentUser, userProfile]);
+
+  // Listen to active Emergency Panic Alerts ("panic_alerts")
+  useEffect(() => {
+    if (!currentUser) {
+      setPanicAlerts([]);
+      return;
+    }
+
+    const panicQuery = query(
+      collection(db, 'panic_alerts'),
+      where('active', '==', true)
+    );
+
+    const unsubPanic = onSnapshot(
+      panicQuery,
+      (snapshot) => {
+        const now = Date.now();
+        const loadedAlerts: PanicAlert[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as PanicAlert;
+          // Show active emergency alerts created within last 2 hours
+          if (data.timestamp && now - data.timestamp < 7200000) {
+            loadedAlerts.push(data);
+          }
+        });
+        setPanicAlerts(loadedAlerts);
+      },
+      (error) => {
+        console.warn('Error fetching panic alerts:', error);
+      }
+    );
+
+    return () => unsubPanic();
+  }, [currentUser]);
+
+  // Trigger loud audio alarm for mototaxistas when new emergency alert is received
+  const prevPanicCountRef = useRef(0);
+  useEffect(() => {
+    if (userProfile?.role === 'moto' && panicAlerts.length > prevPanicCountRef.current) {
+      playLoudAlarmSound();
+    }
+    prevPanicCountRef.current = panicAlerts.length;
+  }, [panicAlerts, userProfile]);
+
+  // Activate Panic Alert
+  const handleActivatePanicAlert = async () => {
+    if (!currentUser || !userProfile || userProfile.role !== 'moto') return;
+    setIsActivatingPanic(true);
+
+    try {
+      const alertId = `panic_${currentUser.uid}`;
+      await setDoc(doc(db, 'panic_alerts', alertId), {
+        id: alertId,
+        driverId: currentUser.uid,
+        driverName: userProfile.name,
+        driverPhone: userProfile.phone || '',
+        mototaxiNumber: userProfile.mototaxiNumber || '',
+        zone: userProfile.zone || 'Langue (Centro)',
+        latitude: userProfile.latitude ?? gpsCoords?.latitude ?? 13.62003,
+        longitude: userProfile.longitude ?? gpsCoords?.longitude ?? -87.65759,
+        timestamp: Date.now(),
+        active: true,
+      });
+
+      setShowPanicModal(false);
+      setIsMapActive(true); // Open live map directly to show SOS position
+    } catch (err) {
+      console.error('Error activating panic alert:', err);
+    } finally {
+      setIsActivatingPanic(false);
+    }
+  };
+
+  // Deactivate Panic Alert
+  const handleDeactivatePanicAlert = async (alertId: string) => {
+    try {
+      await updateDoc(doc(db, 'panic_alerts', alertId), {
+        active: false,
+        resolvedAt: Date.now(),
+      });
+    } catch (err) {
+      console.error('Error deactivating panic alert:', err);
+    }
+  };
+
+  const myActivePanicAlert = useMemo(() => {
+    if (!currentUser) return null;
+    return panicAlerts.find(p => p.driverId === currentUser.uid && p.active) || null;
+  }, [panicAlerts, currentUser]);
 
   // Geolocation tracking is now managed fully inside the useGpsTracker hook.
 
@@ -1038,6 +1160,9 @@ export default function App() {
           onlineUsers={onlineUsers}
           activeChats={chats}
           selectedChatId={selectedChatId}
+          panicAlerts={panicAlerts}
+          onTriggerPanic={() => setShowPanicModal(true)}
+          myActivePanicAlert={myActivePanicAlert}
           onSelectUser={(u) => {
             handleSelectUser(u);
             setIsMapActive(false);
@@ -1064,7 +1189,49 @@ export default function App() {
       </div>
 
       {/* Main center pane (Chat or Map) */}
-      <div className={`h-full flex-1 flex flex-col bg-[#F7F9FB] ${selectedChatId || isMapActive ? 'w-full' : 'hidden md:flex'}`}>
+      <div className={`h-full flex-1 flex flex-col bg-[#F7F9FB] relative ${selectedChatId || isMapActive ? 'w-full' : 'hidden md:flex'}`}>
+        {/* Global Emergency Alert Banner for Mototaxistas */}
+        {userProfile?.role === 'moto' && panicAlerts.length > 0 && (
+          <div className="absolute top-2 left-2 right-2 md:left-4 md:right-4 z-40 bg-red-600 text-white p-3 rounded-2xl shadow-2xl border-2 border-yellow-300 flex items-center justify-between gap-2 animate-bounce">
+            <div className="flex items-center gap-2">
+              <Siren className="w-5 h-5 text-yellow-300 animate-pulse shrink-0" />
+              <div className="text-xs">
+                <strong className="font-black uppercase text-yellow-300 tracking-wide">
+                  ¡ALERTA DE EMERGENCIA - BOTÓN DE PÁNICO!
+                </strong>
+                <p className="text-[11px] font-bold text-white leading-tight">
+                  Mototaxista <span className="underline">{panicAlerts[0].driverName}</span> (Unidad {panicAlerts[0].mototaxiNumber || 'S/N'}) en {panicAlerts[0].zone || 'su zona'}.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setIsMapActive(true)}
+                className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black text-xs px-2.5 py-1.5 rounded-xl shadow transition-all cursor-pointer flex items-center gap-1"
+              >
+                <span>🗺️</span>
+                <span className="hidden sm:inline">Ver Mapa</span>
+              </button>
+              {panicAlerts[0].driverPhone && (
+                <a
+                  href={`tel:${panicAlerts[0].driverPhone}`}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs px-2.5 py-1.5 rounded-xl shadow transition-all flex items-center gap-1"
+                >
+                  <PhoneCall className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Llamar</span>
+                </a>
+              )}
+              <button
+                onClick={() => handleDeactivatePanicAlert(panicAlerts[0].id)}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs px-2 py-1.5 rounded-xl transition-colors cursor-pointer"
+                title="Marcar emergencia como atendida"
+              >
+                ✅
+              </button>
+            </div>
+          </div>
+        )}
+
         {isMapActive ? (
           <div className="h-full w-full relative">
             <div className="md:hidden bg-white p-3 border-b border-slate-200 flex items-center justify-between px-3.5 z-20 relative shrink-0">
@@ -1080,11 +1247,14 @@ export default function App() {
               currentUserProfile={userProfile}
               onlineUsers={onlineUsers}
               activeChats={chats}
+              panicAlerts={panicAlerts}
               onSelectUser={(u, initialMsg) => {
                 handleSelectUser(u, initialMsg);
                 setIsMapActive(false);
               }}
               onCloseMap={() => setIsMapActive(false)}
+              onDeactivatePanic={handleDeactivatePanicAlert}
+              onActivatePanic={() => setShowPanicModal(true)}
             />
           </div>
         ) : activeChat ? (
@@ -1162,6 +1332,65 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Panic Button Confirmation & Resolution Modal */}
+      {showPanicModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border-2 border-red-500 text-center space-y-4 animate-in fade-in zoom-in-95">
+            <div className="w-16 h-16 rounded-full bg-red-100 border-2 border-red-500 text-red-600 flex items-center justify-center mx-auto text-3xl animate-bounce">
+              🚨
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-black text-slate-900 text-lg tracking-tight uppercase">
+                {myActivePanicAlert ? '🚨 ALERTA SOS ACTIVA' : '🚨 BOTÓN DE PÁNICO'}
+              </h3>
+              <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                {myActivePanicAlert
+                  ? 'Tu alerta de emergencia está activa y visible en tiempo real para todos los mototaxistas en línea en el mapa.'
+                  : 'Al confirmar, se enviará una notificación de EMERGENCIA SOS con tu ubicación exacta y número de unidad a todos los mototaxistas en línea de tu zona.'}
+              </p>
+            </div>
+
+            {myActivePanicAlert ? (
+              <div className="space-y-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleDeactivatePanicAlert(myActivePanicAlert.id)}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  ✅ Desactivar / Marcar como Resuelto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPanicModal(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 px-3 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cerrar Ventana
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleActivatePanicAlert}
+                  disabled={isActivatingPanic}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white font-black text-xs py-3.5 px-4 rounded-xl shadow-xl transition-transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 border-2 border-yellow-300 uppercase tracking-wider"
+                >
+                  <Siren className="w-5 h-5 animate-pulse" />
+                  <span>{isActivatingPanic ? 'Enviando Alerta SOS...' : '🚨 SÍ, ACTIVAR ALERTA SOS'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPanicModal(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-3 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -155,5 +155,25 @@ service cloud.firestore {
       allow delete: if isSignedIn()
                     && (resource.data.driverId == request.auth.uid || resource.data.clientId == request.auth.uid);
     }
+
+    // --- TRAJECTORIES COLLECTION (Base de datos de trayectorias de calles) ---
+    match /trajectories/{trajectoryId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && isValidId(trajectoryId)
+                            && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn()
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // --- PANIC ALERTS COLLECTION (Botón de Pánico de Mototaxistas) ---
+    match /panic_alerts/{alertId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && isValidId(alertId)
+                            && request.resource.data.driverId == request.auth.uid;
+      allow delete: if isSignedIn()
+                    && resource.data.driverId == request.auth.uid;
+    }
   }
 }

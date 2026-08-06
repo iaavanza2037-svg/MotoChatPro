@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { getHaversineDistance } from '../utils/location';
 
 export interface GpsCoordinates {
   latitude: number;
@@ -145,6 +146,27 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
       const lat = position.coords.latitude;
       const lon = position.coords.longitude;
       const accuracy = position.coords.accuracy || 0;
+
+      // GPS Jitter/Drift Filter: Only process update if device moved > 8 meters or 2 min elapsed
+      if (coordsRef.current) {
+        const distKm = getHaversineDistance(
+          coordsRef.current.latitude,
+          coordsRef.current.longitude,
+          lat,
+          lon
+        );
+        const distMeters = distKm * 1000;
+        const timeSinceLast = Date.now() - lastUpdatedRef.current;
+
+        if (
+          distMeters < 8 &&
+          timeSinceLast < 120000 &&
+          accuracy >= coordsRef.current.accuracy - 10
+        ) {
+          // Device is stationary; suppress jitter updates
+          return;
+        }
+      }
 
       setCoords({ latitude: lat, longitude: lon, accuracy });
       setGpsStatus('granted');

@@ -4,8 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { UserProfile, ChatSession } from '../types';
-import { LogOut, User, Users, Shield, Compass, ChevronRight, MessageSquare, RefreshCw, Radio, Terminal, Settings, Zap, AlertTriangle } from 'lucide-react';
+import { UserProfile, ChatSession, PanicAlert } from '../types';
+import { LogOut, User, Users, Shield, Compass, ChevronRight, MessageSquare, RefreshCw, Radio, Terminal, Settings, Zap, AlertTriangle, Siren } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getHaversineDistance, ZONAS_COORDINATES } from '../utils/location';
 import { GpsCoordinates, GpsEnvInfo, GpsStatus, TrackingState } from '../hooks/useGpsTracker';
@@ -29,6 +29,9 @@ interface SidebarProps {
   onlineUsers: UserProfile[];
   activeChats: ChatSession[];
   selectedChatId: string | null;
+  panicAlerts?: PanicAlert[];
+  onTriggerPanic?: () => void;
+  myActivePanicAlert?: PanicAlert | null;
   onSelectUser: (user: UserProfile) => void;
   onSelectChat: (chat: ChatSession) => void;
   onTransferChat: (targetDriver: UserProfile) => void;
@@ -52,6 +55,9 @@ export default function Sidebar({
   onlineUsers,
   activeChats,
   selectedChatId,
+  panicAlerts = [],
+  onTriggerPanic,
+  myActivePanicAlert,
   onSelectUser,
   onSelectChat,
   onTransferChat,
@@ -309,6 +315,22 @@ export default function Sidebar({
               >
                 <span>{isMapActive ? '💬' : '🗺️'}</span>
                 <span>{isMapActive ? '💬 Ver Lista de Chats' : '🗺️ Ver Mapa MotoGo en Vivo'}</span>
+              </button>
+            )}
+
+            {/* Emergency Panic Button for Mototaxistas */}
+            {currentUserProfile.role === 'moto' && onTriggerPanic && (
+              <button
+                type="button"
+                onClick={onTriggerPanic}
+                className={`w-full py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg border-2 ${
+                  myActivePanicAlert
+                    ? 'bg-red-600 hover:bg-red-700 text-white border-yellow-300 animate-bounce'
+                    : 'bg-red-600 hover:bg-red-700 text-white border-yellow-400 active:scale-95'
+                }`}
+              >
+                <Siren className="w-4 h-4 animate-pulse shrink-0 text-yellow-300" />
+                <span>{myActivePanicAlert ? '🚨 PÁNICO ACTIVO (Ver / Resolver)' : '🚨 BOTÓN DE PÁNICO (SOS)'}</span>
               </button>
             )}
 

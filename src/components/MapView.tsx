@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useAdvancedMarkerRef, useMap } from '@vis.gl/react-google-maps';
-import { UserProfile, ChatSession, TrafficAlert } from '../types';
+import { UserProfile, ChatSession, TrafficAlert, PanicAlert } from '../types';
 import { ZONAS_COORDINATES, getHaversineDistance } from '../utils/location';
 import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, ExternalLink, AlertTriangle } from 'lucide-react';
 import { collection, onSnapshot, query, setDoc, doc, deleteDoc } from 'firebase/firestore';
@@ -15,8 +15,11 @@ interface MapViewProps {
   currentUserProfile: UserProfile;
   onlineUsers: UserProfile[];
   activeChats?: ChatSession[];
+  panicAlerts?: PanicAlert[];
   onSelectUser: (user: UserProfile, initialMessage?: string) => void;
   onCloseMap?: () => void;
+  onDeactivatePanic?: (alertId: string) => void;
+  onActivatePanic?: () => void;
 }
 
 // Hook for smooth LERP position animation when coordinates update from Firebase
@@ -418,6 +421,86 @@ function TrafficAlertMarkerItem({
   );
 }
 
+// Marker item for Emergency Panic Button Alerts ("Botón de Pánico SOS")
+function PanicAlertMarkerItem({
+  alert,
+  onDeactivate
+}: {
+  key?: string;
+  alert: PanicAlert;
+  onDeactivate?: (alertId: string) => void;
+}) {
+  const [markerRef, marker] = useAdvancedMarkerRef();
+  const [open, setOpen] = useState(true); // Open by default for maximum visibility
+
+  const minutesAgo = Math.max(1, Math.floor((Date.now() - alert.timestamp) / 60000));
+
+  return (
+    <>
+      <AdvancedMarker
+        ref={markerRef}
+        position={{ lat: alert.latitude, lng: alert.longitude }}
+        onClick={() => setOpen(prev => !prev)}
+        title="¡ALERTA DE EMERGENCIA SOS!"
+        zIndex={1000}
+      >
+        <div className="relative cursor-pointer group">
+          <span className="absolute -inset-4 rounded-full bg-red-600 opacity-80 animate-ping"></span>
+          <span className="absolute -inset-8 rounded-full bg-amber-500 opacity-40 animate-ping delay-300"></span>
+          <div className="relative bg-red-600 text-white font-black text-xs px-3 py-1.5 rounded-full shadow-2xl border-2 border-yellow-300 flex items-center gap-1.5 uppercase tracking-wider animate-bounce">
+            <span className="text-base">🚨</span>
+            <span>SOS PÁNICO</span>
+          </div>
+        </div>
+      </AdvancedMarker>
+
+      {open && (
+        <InfoWindow anchor={marker} onCloseClick={() => setOpen(false)}>
+          <div className="p-3 max-w-[260px] text-slate-800 font-sans space-y-2">
+            <div className="flex items-center gap-1.5 text-red-600 font-extrabold text-sm border-b border-red-100 pb-1">
+              <span className="text-xl">🚨</span>
+              <span>EMERGENCIA ACTIVADA</span>
+            </div>
+            <p className="text-xs text-slate-800 font-bold">
+              Mototaxista: <span className="text-red-700">{alert.driverName}</span>
+            </p>
+            {alert.mototaxiNumber && (
+              <p className="text-xs text-slate-700">
+                Unidad N°: <strong className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{alert.mototaxiNumber}</strong>
+              </p>
+            )}
+            <p className="text-[11px] text-slate-600">
+              Zona: <strong>{alert.zone || 'Langue'}</strong> (Hace {minutesAgo} min)
+            </p>
+
+            <div className="pt-1 flex flex-col gap-1.5">
+              {alert.driverPhone && (
+                <a
+                  href={`tel:${alert.driverPhone}`}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-2 px-3 rounded-xl shadow transition-colors flex items-center justify-center gap-2"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>Llamar a Mototaxista</span>
+                </a>
+              )}
+
+              {onDeactivate && (
+                <button
+                  type="button"
+                  onClick={() => onDeactivate(alert.id)}
+                  className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs py-1.5 px-2 rounded-xl transition-colors cursor-pointer"
+                >
+                  ✅ Marcar Atendido / Resolver
+                </button>
+              )}
+            </div>
+          </div>
+        </InfoWindow>
+      )}
+    </>
+  );
+}
+
 const API_KEY =
   process.env.GOOGLE_MAPS_PLATFORM_KEY ||
   (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
@@ -590,7 +673,16 @@ function UserMarkerItem({
   );
 }
 
-export default function MapView({ currentUserProfile, onlineUsers, activeChats, onSelectUser, onCloseMap }: MapViewProps) {
+export default function MapView({
+  currentUserProfile,
+  onlineUsers,
+  activeChats,
+  panicAlerts = [],
+  onSelectUser,
+  onCloseMap,
+  onDeactivatePanic,
+  onActivatePanic,
+}: MapViewProps) {
   const centerCoords = useMemo(() => getUserCoords(currentUserProfile), [currentUserProfile]);
 
   const [trafficAlerts, setTrafficAlerts] = useState<TrafficAlert[]>([]);
@@ -622,9 +714,9 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
     return () => unsubscribe();
   }, []);
 
-  // Handle saving new traffic alert (Operativo vs Accidente)
+  // Handle saving new traffic alert (Operativo vs Accidente) - Solo Mototaxistas
   const handleSaveAlert = async (type: 'operativo' | 'accidente') => {
-    if (!pendingAlertCoords || isSavingAlert) return;
+    if (!pendingAlertCoords || isSavingAlert || currentUserProfile.role !== 'moto') return;
 
     setIsSavingAlert(true);
     try {
@@ -800,10 +892,24 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
         </div>
 
         <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="hidden sm:flex bg-slate-900/90 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-2xl shadow-lg border border-amber-400 items-center gap-1.5">
-            <span className="text-xs">🚨/💥</span>
-            <span>Doble clic para Alerta</span>
-          </div>
+          {currentUserProfile.role === 'moto' && onActivatePanic && (
+            <button
+              type="button"
+              onClick={onActivatePanic}
+              className="bg-red-600 hover:bg-red-700 text-white font-black text-xs px-3 py-2 rounded-2xl shadow-xl border-2 border-yellow-300 flex items-center gap-1.5 animate-pulse cursor-pointer pointer-events-auto transition-transform active:scale-95"
+              title="Activar Botón de Pánico de Emergencia"
+            >
+              <span className="text-sm">🚨</span>
+              <span className="hidden sm:inline font-black">BOTÓN DE PÁNICO</span>
+            </button>
+          )}
+
+          {currentUserProfile.role === 'moto' && (
+            <div className="hidden sm:flex bg-slate-900/90 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-2xl shadow-lg border border-amber-400 items-center gap-1.5">
+              <span className="text-xs">🚨/💥</span>
+              <span>Doble clic para Alerta</span>
+            </div>
+          )}
 
           {onCloseMap && (
             <button
@@ -815,6 +921,30 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
           )}
         </div>
       </div>
+
+      {/* Emergency Active Banner inside Map */}
+      {panicAlerts && panicAlerts.length > 0 && (
+        <div className="absolute top-16 left-3 right-3 z-30 bg-red-600 text-white p-3 rounded-2xl shadow-2xl border-2 border-yellow-300 flex items-center justify-between pointer-events-auto animate-bounce">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl animate-pulse">🚨</span>
+            <div className="text-xs">
+              <strong className="font-black uppercase tracking-wider text-yellow-300">¡ALERTA SOS EN TIEMPO REAL!</strong>
+              <p className="text-[11px] font-bold text-white">
+                {panicAlerts[0].driverName} (Unidad {panicAlerts[0].mototaxiNumber || 'N/A'}) activó el Botón de Pánico en {panicAlerts[0].zone || 'Langue'}.
+              </p>
+            </div>
+          </div>
+          {panicAlerts[0].driverPhone && (
+            <a
+              href={`tel:${panicAlerts[0].driverPhone}`}
+              className="bg-white text-red-700 font-black text-xs px-3 py-1.5 rounded-xl shadow hover:bg-yellow-100 transition-colors flex items-center gap-1 shrink-0"
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span>Llamar</span>
+            </a>
+          )}
+        </div>
+      )}
 
       {/* Map Canvas */}
       <APIProvider apiKey={API_KEY} version="weekly">
@@ -828,8 +958,10 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
           disableDefaultUI={false}
           disableDoubleClickZoom={true}
         >
-          {/* Double Click Listener */}
-          <MapEventsListener onMapDblClick={(coords) => setPendingAlertCoords(coords)} />
+          {/* Double Click Listener (Solo para Mototaxistas) */}
+          {currentUserProfile.role === 'moto' && (
+            <MapEventsListener onMapDblClick={(coords) => setPendingAlertCoords(coords)} />
+          )}
 
           {/* Visual 1 km Coverage Radius Indicator */}
           <Radius1KmCircle center={centerCoords} />
@@ -865,6 +997,15 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
               key={alert.id}
               alert={alert}
               currentUserId={currentUserProfile.uid}
+            />
+          ))}
+
+          {/* Emergency Panic Button Markers ("Botón de Pánico") */}
+          {panicAlerts && panicAlerts.map((pAlert) => (
+            <PanicAlertMarkerItem
+              key={pAlert.id}
+              alert={pAlert}
+              onDeactivate={onDeactivatePanic}
             />
           ))}
         </Map>

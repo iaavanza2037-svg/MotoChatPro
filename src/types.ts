@@ -59,3 +59,16 @@ export interface TrafficAlert {
   type?: 'operativo' | 'accidente';
 }
 
+export interface PanicAlert {
+  id: string;
+  driverId: string;
+  driverName: string;
+  driverPhone?: string;
+  mototaxiNumber?: string;
+  zone?: string;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+  active: boolean;
+}
+

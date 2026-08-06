@@ -143,12 +143,22 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
 
     const successCallback = (position: GeolocationPosition) => {
       failureCountRef.current = 0;
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
+      const rawLat = position.coords.latitude;
+      const rawLon = position.coords.longitude;
       const accuracy = position.coords.accuracy || 0;
 
-      // GPS Jitter/Drift Filter: Only process update if device moved > 8 meters or 2 min elapsed
+      // Round to 5 decimal places (~1.1 meter resolution) to eliminate micro floating-point noise
+      const lat = Number(rawLat.toFixed(5));
+      const lon = Number(rawLon.toFixed(5));
+
+      // GPS Jitter/Drift Filter: Reject noise updates when stationary or accuracy is poor
       if (coordsRef.current) {
+        // Reject low-accuracy readings if we already have a position fix
+        if (accuracy > 45 && coordsRef.current) {
+          addLog(`[Filtro Anti-Deriva] Lectura descartada por baja precisión (+/- ${accuracy.toFixed(1)}m > 45m).`);
+          return;
+        }
+
         const distKm = getHaversineDistance(
           coordsRef.current.latitude,
           coordsRef.current.longitude,
@@ -158,12 +168,9 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
         const distMeters = distKm * 1000;
         const timeSinceLast = Date.now() - lastUpdatedRef.current;
 
-        if (
-          distMeters < 8 &&
-          timeSinceLast < 120000 &&
-          accuracy >= coordsRef.current.accuracy - 10
-        ) {
-          // Device is stationary; suppress jitter updates
+        // Suppress stationary jitter (< 12 meters displacement within 2 minutes)
+        if (distMeters < 12 && timeSinceLast < 120000) {
+          addLog(`[Filtro Anti-Deriva] Micro-desplazamiento ignorado (${distMeters.toFixed(1)}m < 12m). Dispositivo estacionario.`);
           return;
         }
       }
@@ -174,7 +181,7 @@ export function useGpsTracker({ onLocationUpdate, userId }: UseGpsTrackerProps =
       setTrackingState('active');
       lastUpdatedRef.current = Date.now();
 
-      addLog(`¡Señal GPS Activa! Ubicación: ${lat.toFixed(5)}, ${lon.toFixed(5)} (+/- ${accuracy.toFixed(1)}m)`);
+      addLog(`¡Señal GPS Activa! Ubicación: ${lat}, ${lon} (+/- ${accuracy.toFixed(1)}m)`);
 
       if (onLocationUpdateRef.current) {
         onLocationUpdateRef.current(lat, lon, accuracy);

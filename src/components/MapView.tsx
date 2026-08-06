@@ -32,8 +32,8 @@ function useSmoothPosition(targetCoords: { lat: number; lng: number }) {
     const endLat = targetCoords.lat;
     const endLng = targetCoords.lng;
 
-    // Skip animation if movement is imperceptible
-    if (Math.abs(startLat - endLat) < 0.0000001 && Math.abs(startLng - endLng) < 0.0000001) {
+    // Skip animation if movement is imperceptible (< 0.00008 ~ 8-10 meters)
+    if (Math.abs(startLat - endLat) < 0.00008 && Math.abs(startLng - endLng) < 0.00008) {
       return;
     }
 
@@ -67,6 +67,47 @@ function useSmoothPosition(targetCoords: { lat: number; lng: number }) {
   }, [targetCoords.lat, targetCoords.lng]);
 
   return currentCoords;
+}
+
+// Auto-Fit Bounds Helper to keep all active users and markers visible on screen
+function AutoFitBoundsController({
+  users,
+  centerCoords,
+  autoFitTrigger
+}: {
+  users: UserProfile[];
+  centerCoords: { lat: number; lng: number };
+  autoFitTrigger: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || autoFitTrigger === 0) return;
+
+    try {
+      const bounds = new google.maps.LatLngBounds();
+      let count = 0;
+
+      users.forEach((u) => {
+        const coords = getUserCoords(u);
+        if (coords && !isNaN(coords.lat) && !isNaN(coords.lng)) {
+          bounds.extend({ lat: coords.lat, lng: coords.lng });
+          count++;
+        }
+      });
+
+      if (count > 1) {
+        map.fitBounds(bounds, { top: 90, bottom: 90, left: 90, right: 90 });
+      } else if (count === 1) {
+        map.panTo(centerCoords);
+        map.setZoom(15);
+      }
+    } catch (e) {
+      console.warn('Error auto-fitting bounds:', e);
+    }
+  }, [map, autoFitTrigger, users]);
+
+  return null;
 }
 
 // Visual 1 km Radius Circle Overlay on the map
@@ -688,6 +729,7 @@ export default function MapView({
   const [trafficAlerts, setTrafficAlerts] = useState<TrafficAlert[]>([]);
   const [pendingAlertCoords, setPendingAlertCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isSavingAlert, setIsSavingAlert] = useState(false);
+  const [autoFitTrigger, setAutoFitTrigger] = useState(1);
 
   // Subscribe to real-time Traffic Alerts ("Operativos de Tránsito") from Firestore
   useEffect(() => {
@@ -892,6 +934,16 @@ export default function MapView({
         </div>
 
         <div className="flex items-center gap-2 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => setAutoFitTrigger(prev => prev + 1)}
+            className="bg-slate-900/90 hover:bg-slate-800 text-white font-bold text-xs px-2.5 py-2 rounded-2xl shadow-xl border border-amber-400 flex items-center gap-1.5 cursor-pointer transition-transform active:scale-95"
+            title="Encuadrar vista para ver a todos los clientes y mototaxistas en pantalla"
+          >
+            <Compass className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Encuadrar Vista</span>
+          </button>
+
           {currentUserProfile.role === 'moto' && onActivatePanic && (
             <button
               type="button"
@@ -951,6 +1003,8 @@ export default function MapView({
         <Map
           defaultCenter={centerCoords}
           defaultZoom={15}
+          minZoom={12}
+          maxZoom={19}
           mapId="MOTOGO_MAP_ID"
           internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
           style={{ width: '100%', height: '100%' }}
@@ -958,6 +1012,12 @@ export default function MapView({
           disableDefaultUI={false}
           disableDoubleClickZoom={true}
         >
+          {/* Auto-Fit Bounds Controller */}
+          <AutoFitBoundsController
+            users={allMapUsers}
+            centerCoords={centerCoords}
+            autoFitTrigger={autoFitTrigger}
+          />
           {/* Double Click Listener (Solo para Mototaxistas) */}
           {currentUserProfile.role === 'moto' && (
             <MapEventsListener onMapDblClick={(coords) => setPendingAlertCoords(coords)} />

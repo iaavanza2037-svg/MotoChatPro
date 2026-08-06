@@ -121,12 +121,15 @@ export default function App() {
     userId: currentUser?.uid,
     onLocationUpdate: async (lat, lon, accuracy) => {
       if (!currentUser || !userProfile) return;
-      // Only write update if coords changed or hasGPS wasn't set to prevent infinite loop
-      if (
-        !userProfile.hasGPS ||
-        userProfile.latitude !== lat ||
-        userProfile.longitude !== lon
-      ) {
+      // Calculate distance moved compared to current profile
+      const prevLat = userProfile.latitude;
+      const prevLon = userProfile.longitude;
+      const distFromPrevMeters = (prevLat !== undefined && prevLon !== undefined)
+        ? getHaversineDistance(prevLat, prevLon, lat, lon) * 1000
+        : Infinity;
+
+      // Only write update if coords changed by >= 10 meters or hasGPS wasn't set yet
+      if (!userProfile.hasGPS || distFromPrevMeters >= 10) {
         try {
           // Identify nearest community to automatically map text-based zones
           const nearestZone = getNearestPresetZone(lat, lon);

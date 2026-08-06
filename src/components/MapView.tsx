@@ -5,13 +5,14 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useAdvancedMarkerRef, useMap } from '@vis.gl/react-google-maps';
-import { UserProfile } from '../types';
+import { UserProfile, ChatSession } from '../types';
 import { ZONAS_COORDINATES, getHaversineDistance } from '../utils/location';
 import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, ExternalLink } from 'lucide-react';
 
 interface MapViewProps {
   currentUserProfile: UserProfile;
   onlineUsers: UserProfile[];
+  activeChats?: ChatSession[];
   onSelectUser: (user: UserProfile, initialMessage?: string) => void;
   onCloseMap?: () => void;
 }
@@ -176,30 +177,32 @@ function UserMarkerItem({
 
             {!isCurrentUser && (
               <div className="space-y-1.5 border-t border-slate-100 pt-2">
-                {/* Auto Service Request Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    onSelectUser(user, defaultAutoMsg);
-                  }}
-                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider py-2 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
-                >
-                  <Navigation className="w-3.5 h-3.5 fill-slate-950" />
-                  <span>🚀 Solicitar Servicio Automático</span>
-                </button>
+                {/* Auto Service Request Button - ONLY shown to Clients requesting a Mototaxi */}
+                {currentUserProfile.role === 'cliente' && isDriver && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      onSelectUser(user, defaultAutoMsg);
+                    }}
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider py-2 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  >
+                    <Navigation className="w-3.5 h-3.5 fill-slate-950" />
+                    <span>🚀 Solicitar Servicio Automático</span>
+                  </button>
+                )}
 
-                {/* Direct Chat Button */}
+                {/* Direct Chat / Continue Chat Button */}
                 <button
                   type="button"
                   onClick={() => {
                     setOpen(false);
                     onSelectUser(user);
                   }}
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-[10px] uppercase tracking-wider py-2 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
                 >
                   <MessageSquare className="w-3.5 h-3.5 text-yellow-400" />
-                  <span>💬 Abrir Chat Directo</span>
+                  <span>{currentUserProfile.role === 'moto' ? '💬 Continuar Chat / Ver Servicio' : '💬 Abrir Chat Directo'}</span>
                 </button>
               </div>
             )}
@@ -210,8 +213,26 @@ function UserMarkerItem({
   );
 }
 
-export default function MapView({ currentUserProfile, onlineUsers, onSelectUser, onCloseMap }: MapViewProps) {
+export default function MapView({ currentUserProfile, onlineUsers, activeChats, onSelectUser, onCloseMap }: MapViewProps) {
   const centerCoords = useMemo(() => getUserCoords(currentUserProfile), [currentUserProfile]);
+
+  // Set of client UIDs who currently have an active (open, non-deleted) chat/service with this driver
+  const activeClientIdsForDriver = useMemo(() => {
+    if (currentUserProfile.role !== 'moto' || !activeChats) return new Set<string>();
+
+    const clientIds = new Set<string>();
+    activeChats.forEach(chat => {
+      if (
+        chat.driverId === currentUserProfile.uid &&
+        chat.status === 'open' &&
+        !chat.driverDeleted &&
+        !chat.clientDeleted
+      ) {
+        clientIds.add(chat.clientId);
+      }
+    });
+    return clientIds;
+  }, [currentUserProfile, activeChats]);
 
   // If Google Maps API key is missing or not configured
   if (!hasValidKey) {
@@ -272,7 +293,10 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
     );
   }
 
-  // Filter online mototaxis and online clients according to user role
+  // Filter online mototaxis and online clients according to exact user role & active service rules:
+  // 1. CLIENTS ('cliente'): See ALL online mototaxis ('moto') + themselves. NEVER see other clients.
+  // 2. MOTOTAXISTAS ('moto'): See ALL online colleague mototaxis ('moto') + themselves.
+  //    ONLY see a client ('cliente') if that client currently has an active, open chat/service with this mototaxista.
   const allMapUsers = useMemo(() => {
     const isClient = currentUserProfile.role === 'cliente';
     
@@ -281,13 +305,20 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
     const baseList = existsInOnline ? onlineUsers : [currentUserProfile, ...onlineUsers];
 
     if (isClient) {
-      // Clients MUST see all mototaxistas ('moto') and themselves, but MUST NOT see other clients
+      // Clients see themselves and all online mototaxistas ('moto'), but NO other clients
       return baseList.filter(u => u.uid === currentUserProfile.uid || u.role === 'moto');
     } else {
-      // Drivers see everyone (clients seeking service & other drivers)
-      return baseList;
+      // Mototaxistas see themselves and all online colleagues ('moto'), and ONLY clients with active chat/service
+      return baseList.filter(u => {
+        if (u.uid === currentUserProfile.uid) return true; // Self
+        if (u.role === 'moto') return true; // Colleague mototaxistas
+        if (u.role === 'cliente') {
+          return activeClientIdsForDriver.has(u.uid); // Active client in chat
+        }
+        return false;
+      });
     }
-  }, [currentUserProfile, onlineUsers]);
+  }, [currentUserProfile, onlineUsers, activeClientIdsForDriver]);
 
   const activeMototaxisCount = useMemo(() => {
     return onlineUsers.filter(u => u.role === 'moto').length;
@@ -307,7 +338,9 @@ export default function MapView({ currentUserProfile, onlineUsers, onSelectUser,
               <span className="text-slate-200">
                 {currentUserProfile.role === 'cliente' 
                   ? `${activeMototaxisCount} Mototaxis disponibles` 
-                  : `${onlineUsers.length} Usuarios en línea`}
+                  : activeClientIdsForDriver.size > 0 
+                    ? `${activeClientIdsForDriver.size} Servicio(s) activo(s) en mapa`
+                    : `${activeMototaxisCount} Colegas mototaxis`}
               </span>
             </p>
           </div>

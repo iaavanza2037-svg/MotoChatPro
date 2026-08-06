@@ -1079,8 +1079,9 @@ export default function App() {
             <MapView
               currentUserProfile={userProfile}
               onlineUsers={onlineUsers}
-              onSelectUser={(u) => {
-                handleSelectUser(u);
+              activeChats={chats}
+              onSelectUser={(u, initialMsg) => {
+                handleSelectUser(u, initialMsg);
                 setIsMapActive(false);
               }}
               onCloseMap={() => setIsMapActive(false)}

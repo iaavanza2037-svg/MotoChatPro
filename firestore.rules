@@ -142,7 +142,18 @@ service cloud.firestore {
         && (data.longitude is int || data.longitude is float)
         && data.reportedBy == request.auth.uid
         && data.reportedByName is string && data.reportedByName.size() <= 120
-        && (data.timestamp is int || data.timestamp is float);
+        && (data.timestamp is int || data.timestamp is float)
+        && (!('type' in data) || data.type in ['operativo', 'accidente']);
+    }
+
+    // --- ROUTES COLLECTION (Registrador de Trayectorias y Rutas) ---
+    match /routes/{routeId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && isValidId(routeId)
+                            && (request.resource.data.driverId == request.auth.uid || request.resource.data.clientId == request.auth.uid);
+      allow delete: if isSignedIn()
+                    && (resource.data.driverId == request.auth.uid || resource.data.clientId == request.auth.uid);
     }
   }
 }

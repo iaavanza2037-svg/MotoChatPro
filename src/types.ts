@@ -56,5 +56,6 @@ export interface TrafficAlert {
   reportedBy: string;
   reportedByName: string;
   timestamp: number;
+  type?: 'operativo' | 'accidente';
 }
 

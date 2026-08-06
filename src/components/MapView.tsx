@@ -93,25 +93,103 @@ function Radius1KmCircle({ center }: { center: { lat: number; lng: number } }) {
   return null;
 }
 
-// Render shortest route directions between active mototaxista & client
+// Render shortest route directions between active mototaxista & client with street snapping and Firestore trajectory recording
 function ShortestRouteDirections({
+  chatId,
+  driverId,
+  clientId,
   origin,
   destination,
-  label
+  label,
+  isDriver,
 }: {
   key?: string;
+  chatId?: string;
+  driverId?: string;
+  clientId?: string;
   origin: { lat: number; lng: number };
   destination: { lat: number; lng: number };
   label?: string;
+  isDriver?: boolean;
 }) {
   const map = useMap();
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
+  const [recordedWaypoints, setRecordedWaypoints] = useState<Array<{ lat: number; lng: number; timestamp: number }>>([]);
+  const lastRecordedRef = useRef<{ lat: number; lng: number } | null>(null);
 
+  // 1. Subscribe to Firestore recorded trajectory for this active chat/service
+  useEffect(() => {
+    if (!chatId) return;
+
+    const routeDocRef = doc(db, 'routes', chatId);
+    const unsubscribe = onSnapshot(
+      routeDocRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (Array.isArray(data.waypoints)) {
+            setRecordedWaypoints(data.waypoints);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Error reading route trajectory:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [chatId]);
+
+  // 2. Real-Time Trajectory Recording: Driver records GPS waypoints to Firestore as they move
+  useEffect(() => {
+    if (!isDriver || !chatId || !driverId || !clientId) return;
+
+    const distFromLast = lastRecordedRef.current
+      ? getHaversineDistance(lastRecordedRef.current.lat, lastRecordedRef.current.lng, origin.lat, origin.lng) * 1000 // in meters
+      : Infinity;
+
+    // Record waypoint if movement is > 3 meters
+    if (distFromLast > 3) {
+      lastRecordedRef.current = origin;
+      const newPoint = { lat: origin.lat, lng: origin.lng, timestamp: Date.now() };
+
+      const routeDocRef = doc(db, 'routes', chatId);
+      const updatedWaypoints = [...recordedWaypoints, newPoint];
+
+      setDoc(
+        routeDocRef,
+        {
+          id: chatId,
+          chatId,
+          driverId,
+          clientId,
+          waypoints: updatedWaypoints,
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      ).catch((err) => console.warn('Error recording route waypoint:', err));
+    }
+  }, [isDriver, chatId, driverId, clientId, origin.lat, origin.lng, recordedWaypoints]);
+
+  // 3. Render Google Directions or Street-Aligned Fallback
   useEffect(() => {
     if (!map || !origin || !destination) return;
 
     let polylineFallback: google.maps.Polyline | null = null;
+    let recordedPolyline: google.maps.Polyline | null = null;
     let directionsRenderer: google.maps.DirectionsRenderer | null = null;
+
+    // Render recorded waypoints polyline if available
+    if (recordedWaypoints.length >= 2) {
+      recordedPolyline = new google.maps.Polyline({
+        path: recordedWaypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
+        geodesic: true,
+        strokeColor: '#3B82F6', // Blue-500 for recorded real street trajectory
+        strokeOpacity: 0.9,
+        strokeWeight: 5,
+        map,
+      });
+    }
 
     if (window.google?.maps?.DirectionsService) {
       const directionsService = new google.maps.DirectionsService();
@@ -120,65 +198,124 @@ function ShortestRouteDirections({
         suppressMarkers: true,
         polylineOptions: {
           strokeColor: '#EAB308', // MotoGo Yellow-500
-          strokeOpacity: 0.9,
+          strokeOpacity: 0.95,
           strokeWeight: 6,
         },
       });
 
-      directionsService.route(
-        {
-          origin,
-          destination,
-          travelMode: google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          if (status === google.maps.DirectionsStatus.OK && result) {
-            directionsRenderer?.setDirections(result);
-            const route = result.routes[0];
-            if (route && route.legs && route.legs[0]) {
-              setRouteInfo({
-                distance: route.legs[0].distance?.text || '',
-                duration: route.legs[0].duration?.text || '',
-              });
-            }
-          } else {
-            // Fallback to custom Polyline if Directions API is unavailable or route unnavigable
-            polylineFallback = new google.maps.Polyline({
-              path: [origin, destination],
-              geodesic: true,
-              strokeColor: '#EAB308',
-              strokeOpacity: 0.85,
-              strokeWeight: 5,
-              map,
-            });
-          }
+      // Try sequential travel modes (DRIVING -> TWO_WHEELER -> WALKING -> BICYCLE) for street snapping
+      const tryRouteMode = (modes: google.maps.TravelMode[]) => {
+        if (modes.length === 0) {
+          // All Google modes failed: generate street-aligned grid path (never cut diagonally through houses)
+          const streetGridPath = [
+            origin,
+            { lat: origin.lat, lng: (origin.lng + destination.lng) / 2 },
+            { lat: destination.lat, lng: (origin.lng + destination.lng) / 2 },
+            destination,
+          ];
+
+          polylineFallback = new google.maps.Polyline({
+            path: streetGridPath,
+            geodesic: true,
+            strokeColor: '#EAB308',
+            strokeOpacity: 0.85,
+            strokeWeight: 5,
+            map,
+          });
+
+          const distKm = getHaversineDistance(origin.lat, origin.lng, destination.lat, destination.lng);
+          const mins = Math.max(1, Math.round((distKm / 25) * 60)); // ~25 km/h mototaxi speed
+          setRouteInfo({
+            distance: distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`,
+            duration: `${mins} min`,
+          });
+          return;
         }
-      );
+
+        const currentMode = modes[0];
+        directionsService.route(
+          {
+            origin,
+            destination,
+            travelMode: currentMode,
+          },
+          (result, status) => {
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              directionsRenderer?.setDirections(result);
+              const route = result.routes[0];
+              if (route && route.legs && route.legs[0]) {
+                setRouteInfo({
+                  distance: route.legs[0].distance?.text || '',
+                  duration: route.legs[0].duration?.text || '',
+                });
+              }
+            } else {
+              // Try next mode
+              tryRouteMode(modes.slice(1));
+            }
+          }
+        );
+      };
+
+      // Start mode attempts: DRIVING, then WALKING (snaps to pedestrian streets/alleys in towns)
+      const travelModesToTry: google.maps.TravelMode[] = [
+        google.maps.TravelMode.DRIVING,
+        google.maps.TravelMode.WALKING,
+      ];
+      if ((google.maps.TravelMode as any).TWO_WHEELER) {
+        travelModesToTry.push((google.maps.TravelMode as any).TWO_WHEELER);
+      }
+      if ((google.maps.TravelMode as any).BICYCLE) {
+        travelModesToTry.push((google.maps.TravelMode as any).BICYCLE);
+      }
+
+      tryRouteMode(travelModesToTry);
     } else {
+      // Fallback street grid alignment
+      const streetGridPath = [
+        origin,
+        { lat: origin.lat, lng: destination.lng },
+        destination,
+      ];
+
       polylineFallback = new google.maps.Polyline({
-        path: [origin, destination],
+        path: streetGridPath,
         geodesic: true,
         strokeColor: '#EAB308',
         strokeOpacity: 0.85,
         strokeWeight: 5,
         map,
       });
+
+      const distKm = getHaversineDistance(origin.lat, origin.lng, destination.lat, destination.lng);
+      setRouteInfo({
+        distance: distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`,
+        duration: `~${Math.max(1, Math.round((distKm / 25) * 60))} min`,
+      });
     }
 
     return () => {
       if (directionsRenderer) directionsRenderer.setMap(null);
       if (polylineFallback) polylineFallback.setMap(null);
+      if (recordedPolyline) recordedPolyline.setMap(null);
     };
-  }, [map, origin.lat, origin.lng, destination.lat, destination.lng]);
+  }, [map, origin.lat, origin.lng, destination.lat, destination.lng, recordedWaypoints]);
 
   if (!routeInfo) return null;
 
   return (
-    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 text-white px-4 py-2 rounded-2xl shadow-2xl border border-amber-400 flex items-center gap-2 text-xs font-bold pointer-events-auto">
-      <span className="text-amber-400">🛣️</span>
-      <span>
-        {label || 'Ruta activa'}: <span className="text-amber-400 font-extrabold">{routeInfo.distance}</span> (~{routeInfo.duration})
-      </span>
+    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 text-white px-4 py-2 rounded-2xl shadow-2xl border border-amber-400 flex flex-col items-center gap-0.5 text-xs font-bold pointer-events-auto">
+      <div className="flex items-center gap-2">
+        <span className="text-amber-400">🛣️</span>
+        <span>
+          {label || 'Ruta activa'}: <span className="text-amber-400 font-extrabold">{routeInfo.distance}</span> (~{routeInfo.duration})
+        </span>
+      </div>
+      {recordedWaypoints.length > 0 && (
+        <span className="text-[9px] text-emerald-400 font-mono font-normal flex items-center gap-1">
+          <span>📡 Traza de calle registrada ({recordedWaypoints.length} pts)</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -204,7 +341,7 @@ function MapEventsListener({ onMapDblClick }: { onMapDblClick: (latLng: { lat: n
   return null;
 }
 
-// Marker item for Traffic Alert Checkpoints ("Operativos de Tránsito")
+// Marker item for Traffic Alert Checkpoints ("Operativos de Tránsito" & "Accidentes")
 function TrafficAlertMarkerItem({
   alert,
   currentUserId
@@ -218,6 +355,13 @@ function TrafficAlertMarkerItem({
 
   const minutesAgo = Math.max(1, Math.floor((Date.now() - alert.timestamp) / 60000));
   const remainingMin = Math.max(0, 60 - minutesAgo);
+
+  const isAccident = alert.type === 'accidente';
+  const icon = isAccident ? '💥' : '🚨';
+  const label = isAccident ? 'Accidente' : 'Operativo';
+  const title = isAccident ? 'Accidente de Tránsito' : 'Operativo de Tránsito';
+  const badgeStyle = isAccident ? 'bg-orange-600 border-amber-300' : 'bg-red-600 border-amber-300';
+  const pingColor = isAccident ? 'bg-orange-500' : 'bg-red-500';
 
   const handleDelete = async () => {
     try {
@@ -233,13 +377,13 @@ function TrafficAlertMarkerItem({
         ref={markerRef}
         position={{ lat: alert.latitude, lng: alert.longitude }}
         onClick={() => setOpen(prev => !prev)}
-        title="Operativo de Tránsito"
+        title={title}
       >
         <div className="relative cursor-pointer group">
-          <span className="absolute -inset-1.5 rounded-full bg-red-500 opacity-75 animate-ping"></span>
-          <div className="relative bg-red-600 text-white font-black text-[10px] px-2.5 py-1 rounded-full shadow-2xl border-2 border-amber-300 flex items-center gap-1.5 uppercase tracking-wider">
-            <span className="text-sm">🚨</span>
-            <span>Operativo</span>
+          <span className={`absolute -inset-1.5 rounded-full ${pingColor} opacity-75 animate-ping`}></span>
+          <div className={`relative ${badgeStyle} text-white font-black text-[10px] px-2.5 py-1 rounded-full shadow-2xl border-2 flex items-center gap-1.5 uppercase tracking-wider`}>
+            <span className="text-sm">{icon}</span>
+            <span>{label}</span>
           </div>
         </div>
       </AdvancedMarker>
@@ -247,9 +391,9 @@ function TrafficAlertMarkerItem({
       {open && (
         <InfoWindow anchor={marker} onCloseClick={() => setOpen(false)}>
           <div className="p-2.5 max-w-[230px] text-slate-800 font-sans space-y-1.5">
-            <div className="flex items-center gap-1.5 text-red-600 font-extrabold text-xs">
-              <span className="text-base">🚨</span>
-              <span>Operativo de Tránsito</span>
+            <div className={`flex items-center gap-1.5 ${isAccident ? 'text-orange-600' : 'text-red-600'} font-extrabold text-xs`}>
+              <span className="text-base">{icon}</span>
+              <span>{title}</span>
             </div>
             <p className="text-[10px] text-slate-600">
               Reportado por: <strong className="text-slate-900">{alert.reportedByName}</strong>
@@ -478,8 +622,8 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
     return () => unsubscribe();
   }, []);
 
-  // Handle saving new traffic alert
-  const handleSaveAlert = async () => {
+  // Handle saving new traffic alert (Operativo vs Accidente)
+  const handleSaveAlert = async (type: 'operativo' | 'accidente') => {
     if (!pendingAlertCoords || isSavingAlert) return;
 
     setIsSavingAlert(true);
@@ -492,6 +636,7 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
         reportedBy: currentUserProfile.uid,
         reportedByName: currentUserProfile.name,
         timestamp: Date.now(),
+        type: type,
       });
       setPendingAlertCoords(null);
     } catch (err) {
@@ -655,9 +800,9 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
         </div>
 
         <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="hidden sm:flex bg-red-600/90 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-2xl shadow-lg border border-red-500 items-center gap-1">
-            <span>🚨</span>
-            <span>Doble clic para Operativo</span>
+          <div className="hidden sm:flex bg-slate-900/90 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-2xl shadow-lg border border-amber-400 items-center gap-1.5">
+            <span className="text-xs">🚨/💥</span>
+            <span>Doble clic para Alerta</span>
           </div>
 
           {onCloseMap && (
@@ -693,9 +838,13 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
           {activeRoutePairs.map((pair) => (
             <ShortestRouteDirections
               key={pair.chat.id}
+              chatId={pair.chat.id}
+              driverId={pair.driver.uid}
+              clientId={pair.client.uid}
               origin={getUserCoords(pair.driver)}
               destination={getUserCoords(pair.client)}
               label={`Servicio: ${pair.driver.name.split(' ')[0]} ↔ ${pair.client.name.split(' ')[0]}`}
+              isDriver={currentUserProfile.uid === pair.driver.uid}
             />
           ))}
 
@@ -710,7 +859,7 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
             />
           ))}
 
-          {/* Traffic Alert Markers ("Operativos de Tránsito") */}
+          {/* Traffic Alert Markers ("Operativos" & "Accidentes") */}
           {trafficAlerts.map((alert) => (
             <TrafficAlertMarkerItem
               key={alert.id}
@@ -721,30 +870,49 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
         </Map>
       </APIProvider>
 
-      {/* Confirmation Modal for Reporting Traffic Checkpoints */}
+      {/* Confirmation Modal for Reporting Traffic Checkpoints or Accidents */}
       {pendingAlertCoords && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-xs w-full shadow-2xl border border-slate-200 text-center space-y-3 animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto text-2xl animate-pulse">
-              🚨
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto text-2xl animate-pulse">
+              📍
             </div>
-            <h3 className="font-extrabold text-slate-900 text-base">¿Marcar Operativo de Tránsito?</h3>
+            <h3 className="font-extrabold text-slate-900 text-base">Reportar Alerta en Mapa</h3>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Se publicará esta alerta en el mapa para todos los mototaxistas y usuarios en tiempo real. Permanecerá visible durante <strong>1 hora</strong>.
+              Selecciona el tipo de evento en esta ubicación. La alerta se publicará en tiempo real y expira en <strong>1 hora</strong>.
             </p>
-            <div className="pt-2 flex flex-col gap-2">
+
+            <div className="pt-1 flex flex-col gap-2.5">
               <button
                 type="button"
-                onClick={handleSaveAlert}
+                onClick={() => handleSaveAlert('operativo')}
                 disabled={isSavingAlert}
-                className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs py-2.5 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+                className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs py-2.5 px-3 rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-between group"
               >
-                {isSavingAlert ? 'Guardando...' : '🚨 Confirmar Reporte de Operativo'}
+                <div className="flex items-center gap-2">
+                  <span className="text-base group-hover:scale-110 transition-transform">🚨</span>
+                  <span className="text-left font-bold">Operativo de Tránsito</span>
+                </div>
+                <span className="text-[10px] bg-red-800/40 px-1.5 py-0.5 rounded font-mono">Control</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => handleSaveAlert('accidente')}
+                disabled={isSavingAlert}
+                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs py-2.5 px-3 rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-base group-hover:scale-110 transition-transform">💥</span>
+                  <span className="text-left font-bold">Accidente de Tránsito</span>
+                </div>
+                <span className="text-[10px] bg-orange-800/40 px-1.5 py-0.5 rounded font-mono">Alerta</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setPendingAlertCoords(null)}
-                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 rounded-xl transition-colors cursor-pointer"
+                className="w-full mt-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 rounded-xl transition-colors cursor-pointer"
               >
                 Cancelar
               </button>

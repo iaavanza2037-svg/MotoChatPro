@@ -48,3 +48,13 @@ export interface ChatMessage {
   timestamp: number;
   type: 'text' | 'system';
 }
+
+export interface TrafficAlert {
+  id: string;
+  latitude: number;
+  longitude: number;
+  reportedBy: string;
+  reportedByName: string;
+  timestamp: number;
+}
+

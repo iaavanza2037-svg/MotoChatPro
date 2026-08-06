@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useAdvancedMarkerRef, useMap } from '@vis.gl/react-google-maps';
-import { UserProfile, ChatSession } from '../types';
+import { UserProfile, ChatSession, TrafficAlert } from '../types';
 import { ZONAS_COORDINATES, getHaversineDistance } from '../utils/location';
-import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, ExternalLink } from 'lucide-react';
+import { Compass, Navigation, Phone, Star, MessageSquare, Shield, MapPin, Key, ExternalLink, AlertTriangle } from 'lucide-react';
+import { collection, onSnapshot, query, setDoc, doc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface MapViewProps {
   currentUserProfile: UserProfile;
@@ -15,6 +17,53 @@ interface MapViewProps {
   activeChats?: ChatSession[];
   onSelectUser: (user: UserProfile, initialMessage?: string) => void;
   onCloseMap?: () => void;
+}
+
+// Hook for smooth LERP position animation when coordinates update from Firebase
+function useSmoothPosition(targetCoords: { lat: number; lng: number }) {
+  const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number }>(targetCoords);
+
+  useEffect(() => {
+    const startLat = currentCoords.lat;
+    const startLng = currentCoords.lng;
+    const endLat = targetCoords.lat;
+    const endLng = targetCoords.lng;
+
+    // Skip animation if movement is imperceptible
+    if (Math.abs(startLat - endLat) < 0.0000001 && Math.abs(startLng - endLng) < 0.0000001) {
+      return;
+    }
+
+    let animationFrameId: number;
+    let startTime: number | null = null;
+    const duration = 800; // 800ms smooth transition
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      // Smooth ease-out cubic curve
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      const lat = startLat + (endLat - startLat) * easeProgress;
+      const lng = startLng + (endLng - startLng) * easeProgress;
+
+      setCurrentCoords({ lat, lng });
+
+      if (progress < 1) {
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    };
+  }, [targetCoords.lat, targetCoords.lng]);
+
+  return currentCoords;
 }
 
 // Visual 1 km Radius Circle Overlay on the map
@@ -42,6 +91,187 @@ function Radius1KmCircle({ center }: { center: { lat: number; lng: number } }) {
   }, [map, center.lat, center.lng]);
 
   return null;
+}
+
+// Render shortest route directions between active mototaxista & client
+function ShortestRouteDirections({
+  origin,
+  destination,
+  label
+}: {
+  key?: string;
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  label?: string;
+}) {
+  const map = useMap();
+  const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
+
+  useEffect(() => {
+    if (!map || !origin || !destination) return;
+
+    let polylineFallback: google.maps.Polyline | null = null;
+    let directionsRenderer: google.maps.DirectionsRenderer | null = null;
+
+    if (window.google?.maps?.DirectionsService) {
+      const directionsService = new google.maps.DirectionsService();
+      directionsRenderer = new google.maps.DirectionsRenderer({
+        map,
+        suppressMarkers: true,
+        polylineOptions: {
+          strokeColor: '#EAB308', // MotoGo Yellow-500
+          strokeOpacity: 0.9,
+          strokeWeight: 6,
+        },
+      });
+
+      directionsService.route(
+        {
+          origin,
+          destination,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            directionsRenderer?.setDirections(result);
+            const route = result.routes[0];
+            if (route && route.legs && route.legs[0]) {
+              setRouteInfo({
+                distance: route.legs[0].distance?.text || '',
+                duration: route.legs[0].duration?.text || '',
+              });
+            }
+          } else {
+            // Fallback to custom Polyline if Directions API is unavailable or route unnavigable
+            polylineFallback = new google.maps.Polyline({
+              path: [origin, destination],
+              geodesic: true,
+              strokeColor: '#EAB308',
+              strokeOpacity: 0.85,
+              strokeWeight: 5,
+              map,
+            });
+          }
+        }
+      );
+    } else {
+      polylineFallback = new google.maps.Polyline({
+        path: [origin, destination],
+        geodesic: true,
+        strokeColor: '#EAB308',
+        strokeOpacity: 0.85,
+        strokeWeight: 5,
+        map,
+      });
+    }
+
+    return () => {
+      if (directionsRenderer) directionsRenderer.setMap(null);
+      if (polylineFallback) polylineFallback.setMap(null);
+    };
+  }, [map, origin.lat, origin.lng, destination.lat, destination.lng]);
+
+  if (!routeInfo) return null;
+
+  return (
+    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 text-white px-4 py-2 rounded-2xl shadow-2xl border border-amber-400 flex items-center gap-2 text-xs font-bold pointer-events-auto">
+      <span className="text-amber-400">🛣️</span>
+      <span>
+        {label || 'Ruta activa'}: <span className="text-amber-400 font-extrabold">{routeInfo.distance}</span> (~{routeInfo.duration})
+      </span>
+    </div>
+  );
+}
+
+// Map Double-Click Listener for traffic alerts
+function MapEventsListener({ onMapDblClick }: { onMapDblClick: (latLng: { lat: number; lng: number }) => void }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map) return;
+
+    const listener = map.addListener('dblclick', (e: google.maps.MapMouseEvent) => {
+      if (e.latLng) {
+        onMapDblClick({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+      }
+    });
+
+    return () => {
+      google.maps.event.removeListener(listener);
+    };
+  }, [map, onMapDblClick]);
+
+  return null;
+}
+
+// Marker item for Traffic Alert Checkpoints ("Operativos de Tránsito")
+function TrafficAlertMarkerItem({
+  alert,
+  currentUserId
+}: {
+  key?: string;
+  alert: TrafficAlert;
+  currentUserId: string;
+}) {
+  const [markerRef, marker] = useAdvancedMarkerRef();
+  const [open, setOpen] = useState(false);
+
+  const minutesAgo = Math.max(1, Math.floor((Date.now() - alert.timestamp) / 60000));
+  const remainingMin = Math.max(0, 60 - minutesAgo);
+
+  const handleDelete = async () => {
+    try {
+      await deleteDoc(doc(db, 'alerts', alert.id));
+    } catch (err) {
+      console.error('Error deleting alert:', err);
+    }
+  };
+
+  return (
+    <>
+      <AdvancedMarker
+        ref={markerRef}
+        position={{ lat: alert.latitude, lng: alert.longitude }}
+        onClick={() => setOpen(prev => !prev)}
+        title="Operativo de Tránsito"
+      >
+        <div className="relative cursor-pointer group">
+          <span className="absolute -inset-1.5 rounded-full bg-red-500 opacity-75 animate-ping"></span>
+          <div className="relative bg-red-600 text-white font-black text-[10px] px-2.5 py-1 rounded-full shadow-2xl border-2 border-amber-300 flex items-center gap-1.5 uppercase tracking-wider">
+            <span className="text-sm">🚨</span>
+            <span>Operativo</span>
+          </div>
+        </div>
+      </AdvancedMarker>
+
+      {open && (
+        <InfoWindow anchor={marker} onCloseClick={() => setOpen(false)}>
+          <div className="p-2.5 max-w-[230px] text-slate-800 font-sans space-y-1.5">
+            <div className="flex items-center gap-1.5 text-red-600 font-extrabold text-xs">
+              <span className="text-base">🚨</span>
+              <span>Operativo de Tránsito</span>
+            </div>
+            <p className="text-[10px] text-slate-600">
+              Reportado por: <strong className="text-slate-900">{alert.reportedByName}</strong>
+            </p>
+            <p className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+              ⏱️ Hace {minutesAgo} min (Expira en {remainingMin} min)
+            </p>
+
+            {alert.reportedBy === currentUserId && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="w-full mt-1 bg-red-100 hover:bg-red-200 text-red-700 font-bold text-[10px] py-1 px-2 rounded-lg transition-colors cursor-pointer"
+              >
+                🗑️ Eliminar Reporte
+              </button>
+            )}
+          </div>
+        </InfoWindow>
+      )}
+    </>
+  );
 }
 
 const API_KEY =
@@ -83,13 +313,16 @@ function UserMarkerItem({
   const [markerRef, marker] = useAdvancedMarkerRef();
   const [open, setOpen] = useState(false);
 
-  const coords = useMemo(() => getUserCoords(user), [user]);
-  const myCoords = useMemo(() => getUserCoords(currentUserProfile), [currentUserProfile]);
+  const rawCoords = useMemo(() => getUserCoords(user), [user]);
+  // Smooth position interpolation
+  const animatedCoords = useSmoothPosition(rawCoords);
+
+  const myRawCoords = useMemo(() => getUserCoords(currentUserProfile), [currentUserProfile]);
 
   const distanceInKm = useMemo(() => {
     if (isCurrentUser) return 0;
-    return getHaversineDistance(myCoords.lat, myCoords.lng, coords.lat, coords.lng);
-  }, [isCurrentUser, myCoords, coords]);
+    return getHaversineDistance(myRawCoords.lat, myRawCoords.lng, rawCoords.lat, rawCoords.lng);
+  }, [isCurrentUser, myRawCoords, rawCoords]);
 
   const isDriver = user.role === 'moto';
   const myZone = currentUserProfile.zone || 'Langue (Centro)';
@@ -100,7 +333,7 @@ function UserMarkerItem({
     <>
       <AdvancedMarker
         ref={markerRef}
-        position={coords}
+        position={animatedCoords}
         onClick={() => setOpen(prev => !prev)}
         title={`${user.name} (${user.role === 'moto' ? 'Mototaxi' : 'Cliente'})`}
       >
@@ -216,6 +449,58 @@ function UserMarkerItem({
 export default function MapView({ currentUserProfile, onlineUsers, activeChats, onSelectUser, onCloseMap }: MapViewProps) {
   const centerCoords = useMemo(() => getUserCoords(currentUserProfile), [currentUserProfile]);
 
+  const [trafficAlerts, setTrafficAlerts] = useState<TrafficAlert[]>([]);
+  const [pendingAlertCoords, setPendingAlertCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isSavingAlert, setIsSavingAlert] = useState(false);
+
+  // Subscribe to real-time Traffic Alerts ("Operativos de Tránsito") from Firestore
+  useEffect(() => {
+    const q = query(collection(db, 'alerts'));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const now = Date.now();
+        const loadedAlerts: TrafficAlert[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as TrafficAlert;
+          // Only show alerts created within the last 1 hour (3600000 ms)
+          if (data.timestamp && now - data.timestamp < 3600000) {
+            loadedAlerts.push(data);
+          }
+        });
+        setTrafficAlerts(loadedAlerts);
+      },
+      (error) => {
+        console.warn('Error fetching traffic alerts:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Handle saving new traffic alert
+  const handleSaveAlert = async () => {
+    if (!pendingAlertCoords || isSavingAlert) return;
+
+    setIsSavingAlert(true);
+    try {
+      const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await setDoc(doc(db, 'alerts', alertId), {
+        id: alertId,
+        latitude: pendingAlertCoords.lat,
+        longitude: pendingAlertCoords.lng,
+        reportedBy: currentUserProfile.uid,
+        reportedByName: currentUserProfile.name,
+        timestamp: Date.now(),
+      });
+      setPendingAlertCoords(null);
+    } catch (err) {
+      console.error('Error saving traffic alert:', err);
+    } finally {
+      setIsSavingAlert(false);
+    }
+  };
+
   // Set of client UIDs who currently have an active (open, non-deleted) chat/service with this driver
   const activeClientIdsForDriver = useMemo(() => {
     if (currentUserProfile.role !== 'moto' || !activeChats) return new Set<string>();
@@ -233,6 +518,29 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
     });
     return clientIds;
   }, [currentUserProfile, activeChats]);
+
+  // Extract active driver-client pairs with open service chats for rendering short route directions
+  const activeRoutePairs = useMemo(() => {
+    if (!activeChats || activeChats.length === 0) return [];
+
+    const pairs: Array<{ driver: UserProfile; client: UserProfile; chat: ChatSession }> = [];
+
+    activeChats.forEach(chat => {
+      if (chat.status === 'open' && !chat.clientDeleted && !chat.driverDeleted) {
+        // Find driver and client in onlineUsers or currentUserProfile
+        const driver = onlineUsers.find(u => u.uid === chat.driverId) ||
+          (currentUserProfile.uid === chat.driverId ? currentUserProfile : null);
+        const client = onlineUsers.find(u => u.uid === chat.clientId) ||
+          (currentUserProfile.uid === chat.clientId ? currentUserProfile : null);
+
+        if (driver && client) {
+          pairs.push({ driver, client, chat });
+        }
+      }
+    });
+
+    return pairs;
+  }, [activeChats, onlineUsers, currentUserProfile]);
 
   // If Google Maps API key is missing or not configured
   if (!hasValidKey) {
@@ -299,7 +607,7 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
   //    ONLY see a client ('cliente') if that client currently has an active, open chat/service with this mototaxista.
   const allMapUsers = useMemo(() => {
     const isClient = currentUserProfile.role === 'cliente';
-    
+
     // Ensure current user is included
     const existsInOnline = onlineUsers.some(u => u.uid === currentUserProfile.uid);
     const baseList = existsInOnline ? onlineUsers : [currentUserProfile, ...onlineUsers];
@@ -336,9 +644,9 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
               <span>📍 Radio 1km</span>
               <span className="text-slate-400">•</span>
               <span className="text-slate-200">
-                {currentUserProfile.role === 'cliente' 
-                  ? `${activeMototaxisCount} Mototaxis disponibles` 
-                  : activeClientIdsForDriver.size > 0 
+                {currentUserProfile.role === 'cliente'
+                  ? `${activeMototaxisCount} Mototaxis disponibles`
+                  : activeClientIdsForDriver.size > 0
                     ? `${activeClientIdsForDriver.size} Servicio(s) activo(s) en mapa`
                     : `${activeMototaxisCount} Colegas mototaxis`}
               </span>
@@ -346,14 +654,21 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
           </div>
         </div>
 
-        {onCloseMap && (
-          <button
-            onClick={onCloseMap}
-            className="bg-white/95 text-slate-800 hover:bg-white font-extrabold text-xs px-3 py-2 rounded-2xl shadow-xl border border-slate-200 pointer-events-auto cursor-pointer"
-          >
-            ❌ Cerrar
-          </button>
-        )}
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <div className="hidden sm:flex bg-red-600/90 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-2xl shadow-lg border border-red-500 items-center gap-1">
+            <span>🚨</span>
+            <span>Doble clic para Operativo</span>
+          </div>
+
+          {onCloseMap && (
+            <button
+              onClick={onCloseMap}
+              className="bg-white/95 text-slate-800 hover:bg-white font-extrabold text-xs px-3 py-2 rounded-2xl shadow-xl border border-slate-200 cursor-pointer"
+            >
+              ❌ Cerrar
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Map Canvas */}
@@ -366,10 +681,25 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
           style={{ width: '100%', height: '100%' }}
           gestureHandling="greedy"
           disableDefaultUI={false}
+          disableDoubleClickZoom={true}
         >
+          {/* Double Click Listener */}
+          <MapEventsListener onMapDblClick={(coords) => setPendingAlertCoords(coords)} />
+
           {/* Visual 1 km Coverage Radius Indicator */}
           <Radius1KmCircle center={centerCoords} />
 
+          {/* Active Shortest Routes between Drivers & Clients */}
+          {activeRoutePairs.map((pair) => (
+            <ShortestRouteDirections
+              key={pair.chat.id}
+              origin={getUserCoords(pair.driver)}
+              destination={getUserCoords(pair.client)}
+              label={`Servicio: ${pair.driver.name.split(' ')[0]} ↔ ${pair.client.name.split(' ')[0]}`}
+            />
+          ))}
+
+          {/* User Markers */}
           {allMapUsers.map((u) => (
             <UserMarkerItem
               key={u.uid}
@@ -379,8 +709,50 @@ export default function MapView({ currentUserProfile, onlineUsers, activeChats, 
               onSelectUser={onSelectUser}
             />
           ))}
+
+          {/* Traffic Alert Markers ("Operativos de Tránsito") */}
+          {trafficAlerts.map((alert) => (
+            <TrafficAlertMarkerItem
+              key={alert.id}
+              alert={alert}
+              currentUserId={currentUserProfile.uid}
+            />
+          ))}
         </Map>
       </APIProvider>
+
+      {/* Confirmation Modal for Reporting Traffic Checkpoints */}
+      {pendingAlertCoords && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 max-w-xs w-full shadow-2xl border border-slate-200 text-center space-y-3 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto text-2xl animate-pulse">
+              🚨
+            </div>
+            <h3 className="font-extrabold text-slate-900 text-base">¿Marcar Operativo de Tránsito?</h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Se publicará esta alerta en el mapa para todos los mototaxistas y usuarios en tiempo real. Permanecerá visible durante <strong>1 hora</strong>.
+            </p>
+            <div className="pt-2 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleSaveAlert}
+                disabled={isSavingAlert}
+                className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs py-2.5 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                {isSavingAlert ? 'Guardando...' : '🚨 Confirmar Reporte de Operativo'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingAlertCoords(null)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

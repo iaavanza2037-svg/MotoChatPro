@@ -123,5 +123,26 @@ service cloud.firestore {
         && (data.timestamp is int || data.timestamp is float)
         && data.type in ['text', 'system'];
     }
+
+    // --- ALERTS COLLECTION (Operativos de Tránsito) ---
+    match /alerts/{alertId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && isValidId(alertId)
+                    && request.resource.data.reportedBy == request.auth.uid
+                    && isValidAlert(request.resource.data);
+      allow update: if false;
+      allow delete: if isSignedIn()
+                    && resource.data.reportedBy == request.auth.uid;
+    }
+
+    function isValidAlert(data) {
+      return data.id is string && data.id.size() <= 128
+        && (data.latitude is int || data.latitude is float)
+        && (data.longitude is int || data.longitude is float)
+        && data.reportedBy == request.auth.uid
+        && data.reportedByName is string && data.reportedByName.size() <= 120
+        && (data.timestamp is int || data.timestamp is float);
+    }
   }
 }
